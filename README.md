@@ -24,7 +24,7 @@ Closing claude-sessions closes nothing: the sessions are Claude Code background 
 
 ## Requirements
 
-- [claude-accounts](https://github.com/LouisStani/Claude-Accounts) 1.2.0 or later, on your `PATH`
+- [claude-accounts](https://github.com/LouisStani/Claude-Accounts) 2.0.0 or later, on your `PATH`. claude-sessions also builds it in as a library, but panes still start through the command.
 - Claude Code with background sessions (`claude --bg`, `claude attach`, `claude agents`). Tested with 2.1.312.
 - Rust, to build
 - Linux. Other systems are untested.
@@ -97,9 +97,9 @@ Messages are stored as one JSON file each in `~/.local/share/claude-sessions/mai
 
 ## How it works
 
-- The session list comes from `claude-accounts run <account> agents --json`, for every account.
+- Accounts, isolated accounts and their directories come from the claude-accounts library. The session list comes from `claude agents --json` on each account, started with the same rules as `claude-accounts run`.
 - A pane runs `claude-accounts run <account> attach <id>` in its own pseudo-terminal. [alacritty_terminal](https://crates.io/crates/alacritty_terminal) keeps its screen and [ratatui](https://ratatui.rs) draws it.
-- `Ctrl+N` runs `claude-accounts run <account> --bg`, then opens the new session.
+- `Ctrl+N` starts `claude --bg` the way `claude-accounts run` does (shared MCP servers, shared settings, billing variables removed), then opens the new session. Claude Code refuses to start one in a directory the account never trusted: open `claude` there once first.
 - The list refreshes when Claude Code writes to an account's `sessions/`, `daemon/` or `jobs/` directory, or when a message arrives, and every 30 seconds in case a change was missed. Idle, claude-sessions uses about 5% of one CPU core.
 
 claude-sessions never reads credentials. All account handling goes through claude-accounts.

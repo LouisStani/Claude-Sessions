@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 
+use claude_accounts::{Paths, launch, registry};
 use serde::Deserialize;
 
 const LAUNCHER: &str = "claude-accounts";
@@ -98,10 +99,6 @@ pub fn parse_agents(account: &str, json: &str) -> serde_json::Result<Vec<Session
         .collect())
 }
 
-pub fn parse_accounts(json: &str) -> serde_json::Result<Vec<String>> {
-    serde_json::from_str(json)
-}
-
 /// Parses `claude-accounts 1.2.3` into (1, 2, 3).
 pub fn parse_version(output: &str) -> Option<(u32, u32, u32)> {
     let version = output.trim().strip_prefix("claude-accounts ")?;
@@ -135,25 +132,21 @@ pub fn check_launcher_version() -> io::Result<()> {
     Ok(())
 }
 
-#[derive(Deserialize)]
-struct RawAccountStatus {
-    dir: String,
+fn library_error(error: claude_accounts::Error) -> io::Error {
+    io::Error::other(error.to_string())
 }
 
-/// Account directories from `claude-accounts status --json`.
-pub fn parse_account_dirs(json: &str) -> serde_json::Result<Vec<PathBuf>> {
-    let statuses: Vec<RawAccountStatus> = serde_json::from_str(json)?;
-    Ok(statuses.into_iter().map(|status| PathBuf::from(status.dir)).collect())
+pub fn paths() -> io::Result<Paths> {
+    Paths::from_env().map_err(library_error)
 }
 
-/// Costs about 1.3 s of CPU (it checks every login): call it only when accounts change.
-pub fn account_dirs() -> io::Result<Vec<PathBuf>> {
-    parse_account_dirs(&launcher_output(&["status", "--json"])?).map_err(io::Error::other)
+pub fn account_dirs(accounts: &[String]) -> io::Result<Vec<PathBuf>> {
+    let paths = paths()?;
+    Ok(accounts.iter().map(|account| paths.account_dir(account)).collect())
 }
 
-/// Isolated accounts, from `claude-accounts isolated --json` (no Claude call, cheap).
 pub fn isolated_accounts() -> io::Result<Vec<String>> {
-    parse_accounts(&launcher_output(&["isolated", "--json"])?).map_err(io::Error::other)
+    registry::list_isolated(&paths()?).map_err(library_error)
 }
 
 pub fn mark_isolated(sessions: &mut [SessionInfo], isolated: &[String]) {
@@ -167,13 +160,22 @@ pub fn messaging_sessions(sessions: Vec<SessionInfo>) -> Vec<SessionInfo> {
     sessions.into_iter().filter(|session| !session.isolated).collect()
 }
 
-pub fn list_accounts() -> io::Result<Vec<String>> {
-    parse_accounts(&launcher_output(&["list", "--json"])?).map_err(io::Error::other)
-}
-
-fn account_sessions(account: &str) -> io::Result<Vec<SessionInfo>> {
-    let json = launcher_output(&["run", account, "agents", "--json"])?;
-    parse_agents(account, &json).map_err(io::Error::other)
+/// `claude agents --json` on one account, with the environment rules of
+/// `claude-accounts run`. The shared configuration is not linked again here: relinking
+/// removes then recreates the links, and this runs at every refresh.
+fn account_sessions(paths: &Paths, account: &str) -> io::Result<Vec<SessionInfo>> {
+    let dir = launch::require_account(paths, account).map_err(library_error)?;
+    let claude = launch::require_claude().map_err(library_error)?;
+    let mut command = Command::new(claude);
+    for variable in launch::STRIPPED_ENV {
+        command.env_remove(variable);
+    }
+    let output = command.env("CLAUDE_CONFIG_DIR", &dir).args(["agents", "--json"]).stdin(Stdio::null()).output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(io::Error::other(format!("claude agents --json: {}", stderr.trim())));
+    }
+    parse_agents(account, &String::from_utf8_lossy(&output.stdout)).map_err(io::Error::other)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -194,12 +196,16 @@ pub fn sort_sessions(sessions: &mut [SessionInfo]) {
 /// Sessions of every account, accounts queried in parallel. An account that fails is
 /// reported in `errors` and skipped, so one broken account never hides the others.
 pub fn snapshot() -> io::Result<Snapshot> {
-    let accounts = list_accounts()?;
-    let isolated = isolated_accounts()?;
+    let paths = paths()?;
+    let accounts = registry::list_accounts(&paths).map_err(library_error)?;
+    let isolated = registry::list_isolated(&paths).map_err(library_error)?;
     let handles: Vec<_> = accounts
         .iter()
         .cloned()
-        .map(|account| thread::spawn(move || (account.clone(), account_sessions(&account))))
+        .map(|account| {
+            let paths = paths.clone();
+            thread::spawn(move || (account.clone(), account_sessions(&paths, &account)))
+        })
         .collect();
     let mut sessions = Vec::new();
     let mut errors = Vec::new();
@@ -274,14 +280,6 @@ mod tests {
     #[test]
     fn broken_json_is_an_error() {
         assert!(parse_agents("x", "[{").is_err());
-        assert_eq!(parse_accounts(r#"["louis","pro"]"#).unwrap(), ["louis", "pro"]);
-    }
-
-    #[test]
-    fn account_dirs_come_from_status_json() {
-        let json = r#"[{"name":"louis","state":"logged-in","sessions":1,"plan":"pro","dir":"/d/louis"},
-                       {"name":"pro","state":"logged-out","sessions":0,"plan":null,"dir":"/d/pro"}]"#;
-        assert_eq!(parse_account_dirs(json).unwrap(), [PathBuf::from("/d/louis"), PathBuf::from("/d/pro")]);
     }
 
     #[test]

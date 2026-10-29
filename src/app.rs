@@ -136,7 +136,12 @@ impl App {
             },
             AppEvent::Created(result) => {
                 match result {
-                    Ok((account, short_id)) => self.attach(&account, &short_id),
+                    Ok((account, launched)) => {
+                        self.attach(&account, &launched.short_id);
+                        if !launched.warnings.is_empty() {
+                            self.status = Some(launched.warnings.join(" · "));
+                        }
+                    },
                     Err(error) => self.status = Some(error),
                 }
                 Flow::Continue
@@ -180,7 +185,7 @@ impl App {
                 self.status = Some(format!("starting a session on {}…", request.account));
                 let events = self.events.clone();
                 thread::spawn(move || {
-                    let result = new_session::launch(&request).map(|id| (request.account.clone(), id));
+                    let result = new_session::launch(&request).map(|launched| (request.account.clone(), launched));
                     // The receiver only disappears when the app is shutting down.
                     let _ = events.send(AppEvent::Created(result));
                 });

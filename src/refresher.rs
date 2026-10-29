@@ -34,7 +34,7 @@ impl Refresher {
         }
     }
 
-    /// Account directories cost a `status --json` (about 1.3 s of CPU): only when accounts change.
+    /// New directories to watch appear only when the account list changes.
     fn watch_accounts(&mut self, snapshot: &mut Snapshot) {
         let (Ok(watcher), Ok(mailbox)) = (&mut self.watcher, &self.mailbox) else {
             return;
@@ -42,7 +42,7 @@ impl Refresher {
         if snapshot.accounts == self.watched_accounts {
             return;
         }
-        match accounts::account_dirs() {
+        match accounts::account_dirs(&snapshot.accounts) {
             Ok(dirs) => {
                 snapshot.errors.extend(watcher.ensure(&watcher::targets(&dirs, mailbox.root())));
                 self.watched_accounts = snapshot.accounts.clone();

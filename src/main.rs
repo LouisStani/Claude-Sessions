@@ -37,7 +37,7 @@ pub enum AppEvent {
     InputFailed(io::Error),
     Term(PaneKey, TermEvent),
     Snapshot(Result<(Snapshot, HashMap<String, usize>), String>),
-    Created(Result<(String, String), String>),
+    Created(Result<(String, new_session::Launched), String>),
 }
 
 fn main() -> ExitCode {

@@ -1,5 +1,8 @@
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+use claude_accounts::{Paths, launch, mcp};
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -130,23 +133,42 @@ pub fn parse_backgrounded_id(output: &str) -> Option<String> {
     })
 }
 
-/// Starts a background session and returns its short id.
-pub fn launch(request: &Request) -> Result<String, String> {
-    let mut command = Command::new("claude-accounts");
-    command.args(["run", &request.account, "--bg"]);
+pub struct Launched {
+    pub short_id: String,
+    pub warnings: Vec<String>,
+}
+
+fn library_error(error: claude_accounts::Error) -> String {
+    error.to_string()
+}
+
+/// Starts a background session the way `claude-accounts run <account> --bg` does: shared
+/// MCP servers (none for an isolated account), shared settings, billing variables removed.
+pub fn launch(request: &Request) -> Result<Launched, String> {
+    let paths = Paths::from_env().map_err(library_error)?;
+    launch::require_account(&paths, &request.account).map_err(library_error)?;
+    launch::require_claude().map_err(library_error)?;
+    let shared = mcp::prepare(&paths, &request.account).map_err(library_error)?;
+    let mut args: Vec<OsString> = vec!["--bg".into()];
     if !request.name.is_empty() {
-        command.args(["-n", &request.name]);
+        args.push("-n".into());
+        args.push(request.name.clone().into());
     }
+    let prepared =
+        launch::prepare(&paths, &request.account, shared.file.as_deref(), &args).map_err(library_error)?;
+    let mut command = prepared.command;
     let output = command
         .current_dir(&request.directory)
         .stdin(Stdio::null())
         .output()
-        .map_err(|error| format!("claude-accounts: {error}"))?;
+        .map_err(|error| format!("claude: {error}"))?;
     let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
     if !output.status.success() {
         return Err(format!("cannot start the session: {}", text.trim()));
     }
-    parse_backgrounded_id(&text).ok_or_else(|| format!("no session id in: {}", text.trim()))
+    let short_id = parse_backgrounded_id(&text).ok_or_else(|| format!("no session id in: {}", text.trim()))?;
+    let warnings = shared.warnings.into_iter().chain(prepared.warnings).collect();
+    Ok(Launched { short_id, warnings })
 }
 
 #[cfg(test)]
