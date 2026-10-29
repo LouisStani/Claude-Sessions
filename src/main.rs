@@ -1,0 +1,108 @@
+mod accounts;
+mod app;
+mod keys;
+mod layout;
+mod mailbox;
+mod mcp;
+mod new_session;
+mod pane;
+mod picker;
+mod refresher;
+mod render;
+mod ui;
+mod watcher;
+
+use std::collections::HashMap;
+use std::io::{self, stdout};
+use std::iter;
+use std::path::PathBuf;
+use std::process::ExitCode;
+use std::sync::mpsc::{self, Sender};
+use std::thread;
+
+use alacritty_terminal::event::Event as TermEvent;
+use ratatui::DefaultTerminal;
+use ratatui::crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
+use ratatui::crossterm::execute;
+use ratatui::layout::Rect;
+
+use crate::accounts::Snapshot;
+use crate::app::{App, Flow};
+use crate::pane::PaneKey;
+
+const USAGE: &str = "usage: claude-sessions [mcp | --version]";
+
+pub enum AppEvent {
+    Input(Event),
+    InputFailed(io::Error),
+    Term(PaneKey, TermEvent),
+    Snapshot(Result<(Snapshot, HashMap<String, usize>), String>),
+    Created(Result<(String, String), String>),
+}
+
+fn main() -> ExitCode {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let result = match args.iter().map(String::as_str).collect::<Vec<_>>().as_slice() {
+        [] => run_ui(),
+        ["mcp"] => mcp::run(),
+        ["--version" | "-V"] => {
+            println!("claude-sessions {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        },
+        _ => {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        },
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("claude-sessions: {error}");
+            ExitCode::FAILURE
+        },
+    }
+}
+
+fn run_ui() -> io::Result<()> {
+    accounts::check_launcher_version()?;
+    let start_dir = std::env::current_dir()?;
+    let home = std::env::home_dir().ok_or_else(|| io::Error::other("HOME is not set"))?;
+    let result = ratatui::try_init().and_then(|mut terminal| run_loop(&mut terminal, home, start_dir));
+    let restored = execute!(stdout(), DisableBracketedPaste).and_then(|()| ratatui::try_restore());
+    result.and(restored)
+}
+
+fn run_loop(terminal: &mut DefaultTerminal, home: PathBuf, start_dir: PathBuf) -> io::Result<()> {
+    execute!(stdout(), EnableBracketedPaste)?;
+    let (events, inbox) = mpsc::channel();
+    spawn_input_reader(events.clone());
+    refresher::spawn(events.clone());
+    let size = terminal.size()?;
+    let mut app = App::new(events, Rect::new(0, 0, size.width, size.height), home, start_dir);
+    loop {
+        terminal.draw(|frame| ui::draw(frame, &app))?;
+        let first = inbox.recv().map_err(|_| io::Error::other("event channel closed"))?;
+        for event in iter::once(first).chain(inbox.try_iter()) {
+            match app.handle(event) {
+                Flow::Continue => {},
+                Flow::Quit => return Ok(()),
+                Flow::FullRedraw => terminal.clear()?,
+            }
+        }
+    }
+}
+
+fn spawn_input_reader(events: Sender<AppEvent>) {
+    thread::spawn(move || {
+        loop {
+            let message = match event::read() {
+                Ok(event) => AppEvent::Input(event),
+                Err(error) => AppEvent::InputFailed(error),
+            };
+            let failed = matches!(message, AppEvent::InputFailed(_));
+            if events.send(message).is_err() || failed {
+                return;
+            }
+        }
+    });
+}
