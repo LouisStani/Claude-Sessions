@@ -114,3 +114,9 @@ cargo clippy --all-targets
 ```
 
 The tests never start Claude Code and never touch your accounts.
+
+## License
+
+claude-sessions is licensed under [CC BY-NC-SA 4.0](LICENSE). You can use, change and share it for non-commercial purposes, if you credit the author and share your changes under the same license.
+
+Commercial use, including use inside a company, is not allowed by this license. To ask for it, open an issue.
