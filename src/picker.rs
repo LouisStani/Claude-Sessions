@@ -83,6 +83,7 @@ mod tests {
             name: name.into(),
             cwd: cwd.into(),
             state: SessionState::Waiting,
+            isolated: false,
         }
     }
 

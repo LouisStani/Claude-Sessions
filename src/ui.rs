@@ -52,7 +52,10 @@ fn session_lines(app: &App, index: usize, session: &SessionInfo, width: usize) -
         None => Style::new(),
     };
     let unread = app.unread.get(&session.session_id).copied().unwrap_or(0);
-    let detail = format!("  {} · {}", session.account, session.state.label());
+    let mut detail = format!("  {} · {}", session.account, session.state.label());
+    if session.isolated {
+        detail.push_str(" · isolated");
+    }
     [title_line(&number, &session.title(), unread, width, style), Line::styled(truncate(&detail, width), MUTED)]
 }
 

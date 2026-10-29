@@ -30,6 +30,16 @@ pub fn identity_from_env() -> io::Result<Identity> {
     Ok(Identity { session_id, account })
 }
 
+/// An isolated account must never run the messaging server, even if it was added there directly.
+pub fn ensure_not_isolated(account: &str, isolated: &[String]) -> io::Result<()> {
+    if isolated.iter().any(|name| name == account) {
+        return Err(io::Error::other(format!(
+            "account {account} is isolated (claude-accounts isolate): messages between sessions are disabled"
+        )));
+    }
+    Ok(())
+}
+
 pub struct Server<F> {
     identity: Identity,
     mailbox: Mailbox,
@@ -242,8 +252,10 @@ impl<F: Fn() -> io::Result<Vec<SessionInfo>>> Server<F> {
 }
 
 pub fn run() -> io::Result<()> {
-    let server = Server::new(identity_from_env()?, Mailbox::new(mailbox::default_root()?), || {
-        accounts::snapshot().map(|snapshot| snapshot.sessions)
+    let identity = identity_from_env()?;
+    ensure_not_isolated(&identity.account, &accounts::isolated_accounts()?)?;
+    let server = Server::new(identity, Mailbox::new(mailbox::default_root()?), || {
+        accounts::snapshot().map(|snapshot| accounts::messaging_sessions(snapshot.sessions))
     });
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
@@ -277,6 +289,7 @@ mod tests {
             name: name.into(),
             cwd: format!("/home/u/{name}"),
             state: SessionState::Waiting,
+            isolated: false,
         }
     }
 
@@ -352,6 +365,22 @@ mod tests {
         assert_eq!(resolve(&sessions, "ccc", "x").map(|s| s.account.clone()), Err(
             "No other session matches \"ccc\". Call list_sessions to see titles and ids.".to_string()
         ));
+    }
+
+    #[test]
+    fn isolated_account_cannot_run_the_server() {
+        let isolated = ["pro".to_string()];
+        assert!(ensure_not_isolated("pro", &isolated).is_err());
+        assert!(ensure_not_isolated("louis", &isolated).is_ok());
+    }
+
+    #[test]
+    fn sessions_of_isolated_accounts_cannot_be_reached() {
+        let mut sessions = fleet();
+        accounts::mark_isolated(&mut sessions, &["pro".to_string()]);
+        let reachable = accounts::messaging_sessions(sessions);
+        assert!(resolve(&reachable, "cccccccc", "aaaaaaaa-1111").is_err());
+        assert!(resolve(&reachable, "bbbbbbbb", "aaaaaaaa-1111").is_ok());
     }
 
     #[test]

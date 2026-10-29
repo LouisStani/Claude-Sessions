@@ -24,7 +24,7 @@ Closing claude-sessions closes nothing: the sessions are Claude Code background 
 
 ## Requirements
 
-- [claude-accounts](https://github.com/LouisStani/Claude-Accounts) 1.1.0 or later, on your `PATH`
+- [claude-accounts](https://github.com/LouisStani/Claude-Accounts) 1.2.0 or later, on your `PATH`
 - Claude Code with background sessions (`claude --bg`, `claude attach`, `claude agents`). Tested with 2.1.312.
 - Rust, to build
 - Linux. Other systems are untested.
@@ -73,6 +73,8 @@ claude-sessions keeps `Ctrl+H`, `Ctrl+L`, `Ctrl+N`, `Ctrl+P` and `Ctrl+Q` for it
 | `paused` | Background session with no process. Opening it wakes it up. |
 | `elsewhere` | Interactive session running in another terminal. It can receive messages but cannot be shown here. |
 
+`isolated` after the state marks a session of an isolated account.
+
 `2 msg` after a title means the session has two unread messages.
 
 ## Messages between sessions
@@ -88,6 +90,8 @@ The MCP server gives every session three tools:
 A session reads its messages only when it calls `read_messages`, for example when you ask it to. Nothing is typed into a session for you.
 
 Messages are information, not orders. The tools tell Claude to treat them that way and to ask you before acting on a request they contain. In testing, a session that received "please create this file" did not create it and asked the user first.
+
+Isolated accounts (`claude-accounts isolate <account>`, for a work account for example) stay out of messages: their sessions never appear in `list_sessions`, cannot receive messages, and the MCP server refuses to start in them. They can still be shown in a pane.
 
 Messages are stored as one JSON file each in `~/.local/share/claude-sessions/mailbox/<session id>/` (or under `$XDG_DATA_HOME`), in directories readable only by you. A message that has been read moves to `read/`.
 

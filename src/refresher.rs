@@ -62,6 +62,7 @@ impl Refresher {
         snapshot
             .sessions
             .iter()
+            .filter(|session| !session.isolated)
             .filter_map(|session| {
                 let count = mailbox.unread_count(&session.session_id).ok()?;
                 (count > 0).then(|| (session.session_id.clone(), count))

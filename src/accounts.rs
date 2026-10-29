@@ -6,7 +6,7 @@ use std::thread;
 use serde::Deserialize;
 
 const LAUNCHER: &str = "claude-accounts";
-pub const MIN_LAUNCHER_VERSION: (u32, u32, u32) = (1, 1, 0);
+pub const MIN_LAUNCHER_VERSION: (u32, u32, u32) = (1, 2, 0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionState {
@@ -36,6 +36,8 @@ pub struct SessionInfo {
     pub name: String,
     pub cwd: String,
     pub state: SessionState,
+    /// Account isolated by `claude-accounts isolate`: kept out of messages.
+    pub isolated: bool,
 }
 
 impl SessionInfo {
@@ -91,6 +93,7 @@ pub fn parse_agents(account: &str, json: &str) -> serde_json::Result<Vec<Session
             session_id: raw.session_id,
             name: raw.name.unwrap_or_default(),
             cwd: raw.cwd.unwrap_or_default(),
+            isolated: false,
         })
         .collect())
 }
@@ -148,6 +151,22 @@ pub fn account_dirs() -> io::Result<Vec<PathBuf>> {
     parse_account_dirs(&launcher_output(&["status", "--json"])?).map_err(io::Error::other)
 }
 
+/// Isolated accounts, from `claude-accounts isolated --json` (no Claude call, cheap).
+pub fn isolated_accounts() -> io::Result<Vec<String>> {
+    parse_accounts(&launcher_output(&["isolated", "--json"])?).map_err(io::Error::other)
+}
+
+pub fn mark_isolated(sessions: &mut [SessionInfo], isolated: &[String]) {
+    for session in sessions {
+        session.isolated = isolated.contains(&session.account);
+    }
+}
+
+/// Sessions that may take part in messages: never those of an isolated account.
+pub fn messaging_sessions(sessions: Vec<SessionInfo>) -> Vec<SessionInfo> {
+    sessions.into_iter().filter(|session| !session.isolated).collect()
+}
+
 pub fn list_accounts() -> io::Result<Vec<String>> {
     parse_accounts(&launcher_output(&["list", "--json"])?).map_err(io::Error::other)
 }
@@ -160,6 +179,7 @@ fn account_sessions(account: &str) -> io::Result<Vec<SessionInfo>> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Snapshot {
     pub accounts: Vec<String>,
+    pub isolated: Vec<String>,
     /// Sorted by account, then title, so list positions (Alt+1..9) stay stable.
     pub sessions: Vec<SessionInfo>,
     pub errors: Vec<String>,
@@ -175,6 +195,7 @@ pub fn sort_sessions(sessions: &mut [SessionInfo]) {
 /// reported in `errors` and skipped, so one broken account never hides the others.
 pub fn snapshot() -> io::Result<Snapshot> {
     let accounts = list_accounts()?;
+    let isolated = isolated_accounts()?;
     let handles: Vec<_> = accounts
         .iter()
         .cloned()
@@ -189,8 +210,9 @@ pub fn snapshot() -> io::Result<Snapshot> {
             Err(_) => errors.push("account query thread panicked".to_string()),
         }
     }
+    mark_isolated(&mut sessions, &isolated);
     sort_sessions(&mut sessions);
-    Ok(Snapshot { accounts, sessions, errors })
+    Ok(Snapshot { accounts, isolated, sessions, errors })
 }
 
 #[cfg(test)]
@@ -236,6 +258,17 @@ mod tests {
         assert_eq!(order[0], ("louis", "boss-fight".to_string()));
         assert_eq!(order[3], ("louis", "Router".to_string()));
         assert_eq!(order[4].0, "pro");
+    }
+
+    #[test]
+    fn isolated_accounts_are_marked_and_kept_out_of_messages() {
+        let mut sessions = parse_agents("louis", AGENTS).unwrap();
+        sessions.extend(parse_agents("pro", AGENTS).unwrap());
+        mark_isolated(&mut sessions, &["pro".to_string()]);
+        assert!(sessions.iter().all(|s| s.isolated == (s.account == "pro")));
+        let messaging = messaging_sessions(sessions);
+        assert_eq!(messaging.len(), 4);
+        assert!(messaging.iter().all(|s| s.account == "louis"));
     }
 
     #[test]
