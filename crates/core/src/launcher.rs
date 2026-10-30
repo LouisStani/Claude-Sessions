@@ -154,9 +154,10 @@ mod tests {
         root
     }
 
+    /// The folder names offered, whatever separators the typed text used.
     fn completed(text: &str, home: &Path) -> Vec<String> {
-        let separator = std::path::MAIN_SEPARATOR;
-        complete_directory(text, home).into_iter().map(|path| path.rsplit(separator).nth(1).unwrap_or_default().to_string()).collect()
+        let name = |path: &str| path.trim_end_matches(is_separator).rsplit(is_separator).next().unwrap_or_default().to_string();
+        complete_directory(text, home).iter().map(|path| name(path)).collect()
     }
 
     #[test]
