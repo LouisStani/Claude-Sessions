@@ -1,5 +1,6 @@
+use std::collections::BTreeMap;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -141,11 +142,6 @@ pub fn paths() -> io::Result<Paths> {
     Paths::from_env().map_err(library_error)
 }
 
-pub fn account_dirs(accounts: &[String]) -> io::Result<Vec<PathBuf>> {
-    let paths = paths()?;
-    Ok(accounts.iter().map(|account| paths.account_dir(account)).collect())
-}
-
 pub fn isolated_accounts() -> io::Result<Vec<String>> {
     registry::list_isolated(&paths()?).map_err(library_error)
 }
@@ -196,12 +192,25 @@ pub fn sort_sessions(sessions: &mut [SessionInfo]) {
     });
 }
 
-/// Sessions of every account, accounts queried in parallel. An account that fails is
-/// reported in `errors` and skipped, so one broken account never hides the others.
-pub fn snapshot() -> io::Result<Snapshot> {
-    let paths = paths()?;
-    let accounts = registry::list_accounts(&paths).map_err(library_error)?;
-    let isolated = registry::list_isolated(&paths).map_err(library_error)?;
+/// What `claude agents --json` gave for an account: its sessions, or why it failed.
+pub type Found = Result<Vec<SessionInfo>, String>;
+
+/// One account queried, and how long it took.
+pub struct Queried {
+    pub account: String,
+    pub took: Duration,
+    pub found: Found,
+}
+
+/// The accounts registered, then those kept out of messages: two small files.
+pub fn registered(paths: &Paths) -> io::Result<(Vec<String>, Vec<String>)> {
+    let accounts = registry::list_accounts(paths).map_err(library_error)?;
+    let isolated = registry::list_isolated(paths).map_err(library_error)?;
+    Ok((accounts, isolated))
+}
+
+/// Queries `accounts` in parallel.
+pub fn query_accounts(paths: &Paths, accounts: &[String]) -> Vec<Queried> {
     let handles: Vec<_> = accounts
         .iter()
         .cloned()
@@ -209,29 +218,51 @@ pub fn snapshot() -> io::Result<Snapshot> {
             let paths = paths.clone();
             thread::spawn(move || {
                 let start = Instant::now();
-                let found = account_sessions(&paths, &account);
-                (account, start.elapsed(), found)
+                let found = account_sessions(&paths, &account).map_err(|error| error.to_string());
+                (start.elapsed(), found)
             })
         })
         .collect();
+    accounts
+        .iter()
+        .zip(handles)
+        .map(|(account, handle)| {
+            let (took, found) = handle.join().unwrap_or_else(|_| (Duration::ZERO, Err("account query thread panicked".to_string())));
+            Queried { account: account.clone(), took, found }
+        })
+        .collect()
+}
+
+/// The list of every account in `accounts`, from what each gave last. An account that failed
+/// is reported in `errors` and skipped, so one broken account never hides the others.
+pub fn assemble(
+    accounts: Vec<String>,
+    isolated: Vec<String>,
+    found: &BTreeMap<String, Found>,
+    timings: Vec<(String, Duration)>,
+) -> Snapshot {
     let mut sessions = Vec::new();
     let mut errors = Vec::new();
-    let mut timings = Vec::new();
-    for handle in handles {
-        match handle.join() {
-            Ok((account, took, found)) => {
-                match found {
-                    Ok(found) => sessions.extend(found),
-                    Err(error) => errors.push(format!("{account}: {error}")),
-                }
-                timings.push((account, took));
-            },
-            Err(_) => errors.push("account query thread panicked".to_string()),
+    for account in &accounts {
+        match found.get(account) {
+            Some(Ok(listed)) => sessions.extend(listed.iter().cloned()),
+            Some(Err(error)) => errors.push(format!("{account}: {error}")),
+            None => {},
         }
     }
     mark_isolated(&mut sessions, &isolated);
     sort_sessions(&mut sessions);
-    Ok(Snapshot { accounts, isolated, sessions, errors, timings })
+    Snapshot { accounts, isolated, sessions, errors, timings }
+}
+
+/// Sessions of every account, accounts queried in parallel.
+pub fn snapshot() -> io::Result<Snapshot> {
+    let paths = paths()?;
+    let (accounts, isolated) = registered(&paths)?;
+    let queried = query_accounts(&paths, &accounts);
+    let timings = queried.iter().map(|query| (query.account.clone(), query.took)).collect();
+    let found = queried.into_iter().map(|query| (query.account, query.found)).collect();
+    Ok(assemble(accounts, isolated, &found, timings))
 }
 
 #[cfg(test)]
@@ -288,6 +319,23 @@ mod tests {
         let messaging = messaging_sessions(sessions);
         assert_eq!(messaging.len(), 4);
         assert!(messaging.iter().all(|s| s.account == "louis"));
+    }
+
+    #[test]
+    fn assembling_keeps_registry_order_marks_isolated_and_reports_failures() {
+        let found = BTreeMap::from([
+            ("pro".to_string(), Ok(parse_agents("pro", AGENTS).unwrap())),
+            ("louis".to_string(), Ok(parse_agents("louis", AGENTS).unwrap())),
+            ("broken".to_string(), Err("claude agents --json: no".to_string())),
+            ("gone".to_string(), Ok(parse_agents("gone", AGENTS).unwrap())),
+        ]);
+        let accounts = ["louis", "broken", "pro"].map(String::from).to_vec();
+        let snapshot = assemble(accounts.clone(), vec!["pro".to_string()], &found, Vec::new());
+        assert_eq!(snapshot.accounts, accounts);
+        assert_eq!(snapshot.errors, ["broken: claude agents --json: no"]);
+        assert_eq!(snapshot.sessions.len(), 8, "only the accounts registered count");
+        assert_eq!(snapshot.sessions[0].account, "louis");
+        assert!(snapshot.sessions.iter().all(|s| s.isolated == (s.account == "pro")));
     }
 
     #[test]

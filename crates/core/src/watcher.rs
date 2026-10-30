@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
@@ -30,11 +30,12 @@ pub fn targets(account_dirs: &[PathBuf], mailbox_root: &Path) -> Vec<(PathBuf, R
 pub struct ChangeWatcher {
     watcher: RecommendedWatcher,
     watched: HashSet<PathBuf>,
-    changes: Receiver<()>,
+    changes: Receiver<Vec<PathBuf>>,
 }
 
 pub enum Wake {
-    Changed,
+    /// The paths written during the burst, so only what they belong to is read again.
+    Changed(Vec<PathBuf>),
     TimedOut,
     Closed,
 }
@@ -44,10 +45,12 @@ impl ChangeWatcher {
         let (sender, changes) = mpsc::channel();
         let watcher = notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
             // Reads (open/close events) are ignored: `claude agents --json` reads these files.
-            let wrote = result.is_ok_and(|event| event.kind.is_create() || event.kind.is_modify() || event.kind.is_remove());
-            if wrote {
+            let Ok(event) = result else {
+                return;
+            };
+            if event.kind.is_create() || event.kind.is_modify() || event.kind.is_remove() {
                 // The receiver only disappears when the refresher stops.
-                let _ = sender.send(());
+                let _ = sender.send(event.paths);
             }
         })?;
         Ok(Self { watcher, watched: HashSet::new(), changes })
@@ -72,15 +75,27 @@ impl ChangeWatcher {
         errors
     }
 
-    /// Waits for a change, then lets a burst of writes settle so it counts as one.
-    pub fn wait(&self, fallback: Duration, settle: Duration) -> Wake {
-        match self.changes.recv_timeout(fallback) {
-            Ok(()) => {},
+    /// Waits for a change, then lets a burst of writes settle so it counts as one: until
+    /// `settle` passes without a write, but no longer than `max_settle`, or a session that
+    /// keeps writing would hold the list back.
+    pub fn wait(&self, fallback: Duration, settle: Duration, max_settle: Duration) -> Wake {
+        let mut paths = match self.changes.recv_timeout(fallback) {
+            Ok(paths) => paths,
             Err(RecvTimeoutError::Timeout) => return Wake::TimedOut,
             Err(RecvTimeoutError::Disconnected) => return Wake::Closed,
+        };
+        let deadline = Instant::now() + max_settle;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                break;
+            }
+            match self.changes.recv_timeout(settle.min(left)) {
+                Ok(more) => paths.extend(more),
+                Err(_) => break,
+            }
         }
-        while self.changes.recv_timeout(settle).is_ok() {}
-        Wake::Changed
+        Wake::Changed(paths)
     }
 }
 
@@ -116,9 +131,40 @@ mod tests {
             fs::write(root.join(format!("jobs/abc/state-{index}.json")), b"{}").unwrap();
         }
         let started = Instant::now();
-        assert!(matches!(watcher.wait(Duration::from_secs(5), Duration::from_millis(200)), Wake::Changed));
+        let Wake::Changed(paths) = watcher.wait(Duration::from_secs(5), Duration::from_millis(200), Duration::from_secs(5)) else {
+            panic!("no change seen");
+        };
         assert!(started.elapsed() < Duration::from_secs(2));
-        assert!(matches!(watcher.wait(Duration::from_millis(300), Duration::from_millis(50)), Wake::TimedOut));
+        // Some systems name the directory differently (/private/var on macOS): the file names count.
+        for index in 0..5 {
+            let name = format!("state-{index}.json");
+            assert!(paths.iter().any(|path| path.file_name().is_some_and(|file| file == name.as_str())), "{name} not in {paths:?}");
+        }
+        let quiet = watcher.wait(Duration::from_millis(300), Duration::from_millis(50), Duration::from_secs(5));
+        assert!(matches!(quiet, Wake::TimedOut));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn a_session_that_keeps_writing_does_not_hold_the_list_back() {
+        let root = std::env::temp_dir().join(format!("claude-sessions-watch-busy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let mut watcher = ChangeWatcher::new().unwrap();
+        assert!(watcher.ensure(&[(root.clone(), RecursiveMode::Recursive)]).is_empty());
+        let writing = root.clone();
+        let writer = std::thread::spawn(move || {
+            for index in 0..20 {
+                fs::write(writing.join("state.json"), index.to_string()).unwrap();
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let started = Instant::now();
+        let woke = watcher.wait(Duration::from_secs(5), Duration::from_millis(300), Duration::from_secs(1));
+        let waited = started.elapsed();
+        writer.join().unwrap();
+        assert!(matches!(woke, Wake::Changed(_)));
+        assert!(waited < Duration::from_millis(1500), "waited {waited:?} while writes went on for 2 s");
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -134,7 +180,7 @@ mod tests {
         assert!(watcher.ensure(&[(root.clone(), RecursiveMode::Recursive)]).is_empty());
         fs::read(root.join("roster.json")).unwrap();
         fs::read_dir(&root).unwrap().for_each(drop);
-        assert!(matches!(watcher.wait(Duration::from_millis(500), Duration::from_millis(50)), Wake::TimedOut));
+        assert!(matches!(watcher.wait(Duration::from_millis(500), Duration::from_millis(50), Duration::from_secs(1)), Wake::TimedOut));
         fs::remove_dir_all(root).unwrap();
     }
 }

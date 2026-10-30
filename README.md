@@ -108,7 +108,7 @@ Messages are stored as one JSON file each in `~/.local/share/claude-sessions/mai
 - Accounts, isolated accounts and their directories come from the claude-accounts library. The session list comes from `claude agents --json` on each account, started with the same rules as `claude-accounts run`.
 - A pane runs `claude-accounts run <account> attach <id>` in its own pseudo-terminal. [alacritty_terminal](https://crates.io/crates/alacritty_terminal) keeps its screen and [ratatui](https://ratatui.rs) draws it.
 - `Ctrl+N` starts `claude --bg` the way `claude-accounts run` does (shared MCP servers, shared settings, billing variables removed), then opens the new session. Claude Code refuses to start one in a directory the account never trusted: open `claude` there once first.
-- The list refreshes when Claude Code writes to an account's `sessions/`, `daemon/` or `jobs/` directory, or when a message arrives, and every 30 seconds in case a change was missed. Idle, claude-sessions uses about 5% of one CPU core.
+- The list refreshes when Claude Code writes to an account's `sessions/`, `daemon/` or `jobs/` directory, or when a message arrives, and every 30 seconds in case a change was missed. A write queries only its account again, a message none (only unread counts are counted again), and the 30-second refresh queries every account. A burst of writes counts once: the list waits until 0.3 s pass without one, but never more than 1 s. Idle, claude-sessions uses about 5% of one CPU core.
 
 claude-sessions never reads credentials. All account handling goes through claude-accounts.
 
