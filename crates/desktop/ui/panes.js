@@ -113,13 +113,14 @@ function leaves(node, found = []) {
 }
 
 export class Panes {
-  constructor(container, bar, { keyFilter, onChange, titleOf, isFinished }) {
+  constructor(container, bar, { keyFilter, onChange, titleOf, isFinished, markOf }) {
     this.container = container;
     this.bar = bar;
     this.keyFilter = keyFilter;
     this.onChange = onChange;
     this.titleOf = titleOf;
     this.isFinished = isFinished;
+    this.markOf = markOf;
     this.state = null;
     this.views = new Map();
   }
@@ -128,8 +129,18 @@ export class Panes {
     this.render(await invoke("tabs"));
   }
 
+  // The visible tab: its `project` is null for "all".
+  activeTab() {
+    return this.state.tabs.find((tab) => tab.id === this.state.active);
+  }
+
   layout() {
-    return this.state.tabs.find((tab) => tab.id === this.state.active).layout;
+    return this.activeTab().layout;
+  }
+
+  projectName(id) {
+    const tab = this.state === null ? null : this.state.tabs.find((tab) => tab.id === id);
+    return tab && tab.project ? tab.project.name : null;
   }
 
   allLeaves() {
@@ -208,15 +219,19 @@ export class Panes {
     }
   }
 
+  // "n name" per tab; a project tab carries the dot of its most urgent session.
   renderBar() {
     if (this.state === null) return;
     this.bar.replaceChildren(
       ...this.state.tabs.map((tab, index) => {
-        const shown = leaves(tab.layout.root).find((leaf) => leaf.id === tab.layout.active);
-        const title = shown && shown.session ? this.titleOf(shown.session) : "empty";
-        // The heads of the panes name the sessions: a tab only shows its number.
-        const button = element("button", "tab", `${index + 1}`);
-        button.title = title;
+        const button = element("button", "tab");
+        button.append(element("span", "pos", `${index + 1}`), element("span", "tab-name", tab.project ? tab.project.name : "all"));
+        button.title = tab.project ? tab.project.directory : "every session";
+        const mark = tab.project ? this.markOf(tab.id) : null;
+        if (mark) {
+          button.classList.add(mark);
+          button.append(element("span", "dot", mark === "finished" ? "✓" : ""));
+        }
         button.classList.toggle("active", tab.id === this.state.active);
         button.onclick = () => this.goTab(index + 1);
         return button;
@@ -266,8 +281,8 @@ export class Panes {
     this.render(await invoke("close_pane"));
   }
 
-  async newTab() {
-    this.render(await invoke("new_tab"));
+  async addProject(directory) {
+    this.render(await invoke("add_project", { directory }));
   }
 
   async closeTab() {
@@ -280,6 +295,11 @@ export class Panes {
 
   async goTab(number) {
     this.render(await invoke("go_tab", { number }));
+  }
+
+  async goTabId(id) {
+    const index = this.state.tabs.findIndex((tab) => tab.id === id);
+    if (index >= 0 && id !== this.state.active) await this.goTab(index + 1);
   }
 
   // Shows `session` in the active pane. If a pane of any tab shows it already, Rust brings

@@ -2,22 +2,25 @@
 
 mod layout;
 mod pane;
+mod projects;
 mod tabs;
 mod view;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use claude_sessions_core::attach::attach_command;
 use claude_sessions_core::launcher::{self, Request, resolve_directory};
-use claude_sessions_core::{accounts, refresher};
+use claude_sessions_core::{accounts, mailbox, refresher};
 use serde::Serialize;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 use crate::layout::{PaneId, SessionKey, Shown};
 use crate::pane::Pane;
+use crate::projects::Project;
 use crate::tabs::Tabs;
 use crate::view::{ListView, SessionRow};
 
@@ -35,6 +38,9 @@ struct Shared {
     /// Problems found at startup, shown above every list since a refresh cannot fix them.
     startup_errors: Vec<String>,
     workspace: Mutex<Workspace>,
+    /// Where the projects are kept, or why they cannot be: a file that did not load is
+    /// never written over.
+    projects_file: Result<PathBuf, String>,
 }
 
 impl Shared {
@@ -149,21 +155,52 @@ fn resize_split(shared: State<'_, Shared>, split: PaneId, ratio: f32) -> Tabs {
     workspace.tabs.clone()
 }
 
-#[tauri::command]
-fn new_tab(app: AppHandle, shared: State<'_, Shared>) -> Tabs {
-    let mut workspace = shared.workspace();
-    workspace.tabs.new_tab();
-    respond(&app, &shared, workspace)
+fn save_projects(shared: &Shared, tabs: &Tabs) -> Result<(), String> {
+    let path = shared.projects_file.as_ref()?;
+    projects::save(path, &tabs.projects()).map_err(|error| format!("cannot save {}: {error}", path.display()))
 }
 
+/// The projects changed: every session goes to its tab again.
+fn reassign(app: &AppHandle, shared: &Shared, tabs: &Tabs) {
+    let view = {
+        let mut view = shared.view.lock().unwrap_or_else(PoisonError::into_inner);
+        view::assign(&mut view, tabs);
+        view.clone()
+    };
+    let _ = app.emit("sessions", &view);
+}
+
+/// A tab for the folder typed in the page, kept in `projects.json`.
 #[tauri::command]
-fn close_tab(app: AppHandle, shared: State<'_, Shared>) -> Tabs {
+fn add_project(app: AppHandle, shared: State<'_, Shared>, directory: String) -> Result<Tabs, String> {
+    let home = std::env::home_dir().ok_or("HOME is not set")?;
+    let directory = resolve_directory(&directory, &home)?;
     let mut workspace = shared.workspace();
-    // Detaching only: the background sessions keep running in Claude Code.
-    for pane in workspace.tabs.close_tab().unwrap_or_default() {
+    let mut next = workspace.tabs.clone();
+    next.add_project(Project::new(directory))?;
+    save_projects(&shared, &next)?;
+    workspace.tabs = next;
+    let tabs = respond(&app, &shared, workspace);
+    reassign(&app, &shared, &tabs);
+    Ok(tabs)
+}
+
+/// Forgets the project of the active tab. Detaching only: its sessions keep running.
+#[tauri::command]
+fn close_tab(app: AppHandle, shared: State<'_, Shared>) -> Result<Tabs, String> {
+    let mut workspace = shared.workspace();
+    let mut next = workspace.tabs.clone();
+    let Some(panes) = next.close_tab() else {
+        return Err("the all tab stays".into());
+    };
+    save_projects(&shared, &next)?;
+    workspace.tabs = next;
+    for pane in panes {
         workspace.attached.remove(&pane);
     }
-    respond(&app, &shared, workspace)
+    let tabs = respond(&app, &shared, workspace);
+    reassign(&app, &shared, &tabs);
+    Ok(tabs)
 }
 
 #[tauri::command]
@@ -260,10 +297,11 @@ fn resize_pane(shared: State<'_, Shared>, pane: PaneId, columns: u16, rows: u16)
 
 fn publish(app: &AppHandle, update: refresher::Update) -> bool {
     let shared = app.state::<Shared>();
-    let watched = shared.workspace().tabs.watched().cloned();
+    let tabs = shared.workspace().tabs.clone();
     let view = {
         let mut current = shared.view.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut next = view::apply(&current, update, watched.as_ref());
+        let mut next = view::apply(&current, update, tabs.watched());
+        view::assign(&mut next, &tabs);
         next.errors.splice(0..0, shared.startup_errors.iter().cloned());
         *current = next.clone();
         next
@@ -278,9 +316,29 @@ fn detach_on_exit(app: &AppHandle, event: RunEvent) {
     }
 }
 
+/// The tabs of the projects kept in `projects.json`, and where to keep them.
+fn load_projects(errors: &mut Vec<String>) -> (Tabs, Result<PathBuf, String>) {
+    let path = match mailbox::data_dir() {
+        Ok(directory) => directory.join("projects.json"),
+        Err(error) => {
+            errors.push(format!("projects unavailable: {error}"));
+            return (Tabs::default(), Err(format!("projects unavailable: {error}")));
+        },
+    };
+    match projects::load(&path) {
+        Ok(projects) => (Tabs::with_projects(projects), Ok(path)),
+        Err(error) => {
+            errors.push(format!("projects not loaded: {error}"));
+            (Tabs::default(), Err(format!("{} did not load: fix or delete it", path.display())))
+        },
+    }
+}
+
 fn main() -> ExitCode {
-    let startup_errors = accounts::check_launcher_version().err().map(|error| error.to_string()).into_iter().collect();
-    let shared = Shared { view: Mutex::new(ListView::default()), startup_errors, workspace: Mutex::default() };
+    let mut startup_errors: Vec<String> = accounts::check_launcher_version().err().map(|error| error.to_string()).into_iter().collect();
+    let (restored, projects_file) = load_projects(&mut startup_errors);
+    let workspace = Workspace { tabs: restored, ..Workspace::default() };
+    let shared = Shared { view: Mutex::new(ListView::default()), startup_errors, workspace: Mutex::new(workspace), projects_file };
     let built = tauri::Builder::default()
         .manage(shared)
         .invoke_handler(tauri::generate_handler![
@@ -293,7 +351,7 @@ fn main() -> ExitCode {
             focus_pane,
             focus_step,
             resize_split,
-            new_tab,
+            add_project,
             close_tab,
             tab_step,
             go_tab,

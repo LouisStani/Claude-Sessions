@@ -44,22 +44,40 @@ function chipState(session) {
   return session.state;
 }
 
+// The sessions of the bar: those of the visible project, or every one in "all". Rust sorts
+// them, most urgent first.
+function barSessions() {
+  if (panes.state === null) return [];
+  const tab = panes.activeTab();
+  return tab.project ? lastView.sessions.filter((session) => session.tab === tab.id) : lastView.sessions;
+}
+
+// The dot of a project tab: its most urgent session, if that one needs you.
+function markOf(tabId) {
+  const session = lastView.sessions.find((row) => row.tab === tabId);
+  if (!session) return null;
+  if (session.unread > 0) return "waiting";
+  const state = chipState(session);
+  return state === "finished" || state === "waiting" ? state : null;
+}
+
 function sessionItem(session) {
   const item = element("li", "session");
   const title = element("div", "title");
-  title.append(element("span", "number", session.number ? `${session.number}` : ""));
   title.append(element("span", "name", session.title));
   if (session.unread > 0) title.append(element("span", "badge", `${session.unread} msg`));
   if (session.finished) title.append(element("span", "done", "done"));
   const detail = [session.account, session.state];
   if (session.isolated) detail.push("isolated");
+  const project = panes.projectName(session.tab);
+  if (project) detail.push(project);
   item.append(title, element("div", "detail", detail.join(" · ")));
   return item;
 }
 
-function chip(session) {
+function chip(session, index) {
   const item = element("li", `chip ${chipState(session)}`);
-  item.append(element("span", "pos", session.number ? `${session.number}` : ""));
+  item.append(element("span", "pos", index < 9 ? `${index + 1}` : ""));
   item.append(element("span", "dot", session.finished ? "✓" : ""));
   item.append(element("span", "chip-title", session.title));
   if (session.unread > 0) item.append(element("span", "badge", `${session.unread}`));
@@ -114,14 +132,15 @@ function fitChips() {
 function renderChips(view) {
   const chips = document.getElementById("chips");
   hideTip();
+  const sessions = barSessions();
   if (!view.loaded) {
     chips.replaceChildren(element("li", "chip-note", "loading…"));
-  } else if (view.sessions.length === 0) {
-    chips.replaceChildren(element("li", "chip-note", "no sessions · ctrl+n starts one"));
+  } else if (sessions.length === 0) {
+    chips.replaceChildren(element("li", "chip-note", "no sessions here · ctrl+n starts one"));
   } else {
     const more = element("li", "chip more");
     more.addEventListener("click", openPicker);
-    chips.replaceChildren(...view.sessions.map(chip), more);
+    chips.replaceChildren(...sessions.map(chip), more);
   }
   fitChips();
 }
@@ -145,17 +164,20 @@ function titleOf(key) {
   return session ? session.title : key.short_id;
 }
 
-function openSession(session) {
+// A session opens in the tab of its project: "all" only shows sessions of no project. A
+// session just started is not in the list yet: it opens where it was started.
+async function openSession(session) {
   if (!session.short_id) {
     setStatus(elsewhere(session));
-    return Promise.resolve();
+    return;
   }
   setStatus("");
-  return panes.open(session);
+  if (session.tab !== undefined) await panes.goTabId(session.tab);
+  await panes.open(session);
 }
 
 function showNumber(number) {
-  const session = lastView.sessions[number - 1];
+  const session = barSessions()[number - 1];
   if (!session) {
     setStatus(`no session #${number}`);
     return;
@@ -167,7 +189,8 @@ function openNewSessionForm() {
   const form = document.getElementById("new-form");
   const fields = form.elements;
   fields.account.replaceChildren(...lastView.accounts.map((account) => element("option", "", account)));
-  fields.directory.value = "~";
+  const project = panes.activeTab().project;
+  fields.directory.value = project ? project.directory : "~";
   fields.name.value = "";
   document.getElementById("new-message").textContent = "";
   form.querySelector("button").disabled = false;
@@ -202,6 +225,34 @@ async function startNewSession(event) {
   dialog.close();
   await openSession(created);
   if (created.warnings.length > 0) setStatus(created.warnings.join(" · "));
+}
+
+function openProjectForm() {
+  const form = document.getElementById("project-form");
+  form.elements.directory.value = "~";
+  document.getElementById("project-message").textContent = "";
+  document.getElementById("new-project").showModal();
+  form.elements.directory.focus();
+}
+
+async function addProject(event) {
+  event.preventDefault();
+  const dialog = document.getElementById("new-project");
+  try {
+    await panes.addProject(event.target.elements.directory.value);
+  } catch (error) {
+    document.getElementById("project-message").textContent = `${error}`;
+    return;
+  }
+  dialog.close();
+}
+
+async function closeTab() {
+  try {
+    await panes.closeTab();
+  } catch (error) {
+    setStatus(`${error}`);
+  }
 }
 
 function renderPicker() {
@@ -270,8 +321,8 @@ function shortcutFor(event) {
   const ctrlShift = event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
   if (ctrlShift && event.code === "KeyD") return { run: () => panes.split() };
   if (ctrlShift && event.code === "KeyW") return { run: () => panes.close() };
-  if (ctrlShift && event.code === "KeyT") return { run: () => panes.newTab() };
-  if (ctrlShift && event.code === "KeyX") return { run: () => panes.closeTab() };
+  if (ctrlShift && event.code === "KeyT") return { run: openProjectForm };
+  if (ctrlShift && event.code === "KeyX") return { run: closeTab };
   if (ctrlShift && event.code === "KeyH") return { run: () => panes.tabStep(-1) };
   if (ctrlShift && event.code === "KeyL") return { run: () => panes.tabStep(1) };
   if (ctrlShift && digit) return { run: () => panes.goTab(Number(digit[1])) };
@@ -291,11 +342,13 @@ const panes = new Panes(document.getElementById("panes"), document.getElementByI
   onChange: () => render(lastView),
   titleOf,
   isFinished,
+  markOf,
 });
 
 document.addEventListener("keydown", onKey);
 new ResizeObserver(fitChips).observe(document.getElementById("chips"));
 document.getElementById("new-form").addEventListener("submit", startNewSession);
+document.getElementById("project-form").addEventListener("submit", addProject);
 document.getElementById("picker-query").addEventListener("input", filterPicker);
 document.getElementById("picker-query").addEventListener("keydown", onPickerKey);
 for (const dialog of document.querySelectorAll("dialog")) {

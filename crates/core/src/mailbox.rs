@@ -25,15 +25,25 @@ pub struct Mailbox {
     root: PathBuf,
 }
 
-/// Next to the claude-accounts data: `$XDG_DATA_HOME` (else `~/.local/share`) on Unix, the
-/// user's AppData on Windows, then `claude-sessions/mailbox`.
-pub fn default_root() -> io::Result<PathBuf> {
-    root_for(&Paths::from_env().map_err(io::Error::other)?)
+/// Where claude-sessions keeps its files, next to the claude-accounts data: `$XDG_DATA_HOME`
+/// (else `~/.local/share`) on Unix, the user's AppData on Windows, then `claude-sessions`.
+pub fn data_dir() -> io::Result<PathBuf> {
+    data_dir_for(&Paths::from_env().map_err(io::Error::other)?)
 }
 
-fn root_for(paths: &Paths) -> io::Result<PathBuf> {
+fn data_dir_for(paths: &Paths) -> io::Result<PathBuf> {
     let data = paths.data_root.parent().ok_or_else(|| io::Error::other("claude-accounts data has no parent"))?;
-    Ok(data.join("claude-sessions").join("mailbox"))
+    Ok(data.join("claude-sessions"))
+}
+
+/// `mailbox` in the data directory.
+pub fn default_root() -> io::Result<PathBuf> {
+    Ok(data_dir()?.join("mailbox"))
+}
+
+#[cfg(test)]
+fn root_for(paths: &Paths) -> io::Result<PathBuf> {
+    Ok(data_dir_for(paths)?.join("mailbox"))
 }
 
 pub fn now_secs() -> u64 {

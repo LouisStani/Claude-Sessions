@@ -10,10 +10,8 @@ publish.workspace = true
 claude-sessions-core = { path = "../core" }
 portable-pty = "0.9"
 serde.workspace = true
-tauri = "2.12"
-
-[dev-dependencies]
 serde_json.workspace = true
+tauri = "2.12"
 
 [build-dependencies]
 tauri-build = "2.7"

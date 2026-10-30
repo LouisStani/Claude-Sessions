@@ -329,9 +329,13 @@ ol, ul {
 }
 
 .tab {
-  min-width: 30px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 180px;
   height: 28px;
   padding: 0 8px;
+  white-space: nowrap;
   border: var(--stroke) solid var(--line-strong);
   border-radius: var(--radius);
   background: transparent;
@@ -340,10 +344,20 @@ ol, ul {
   cursor: pointer;
 }
 
+.tab-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .tab.active {
   background: var(--active);
   border-color: var(--active);
   color: var(--on-active);
+}
+
+.tab.active .pos {
+  color: var(--on-active);
+  opacity: 0.75;
 }
 
 #panes {
@@ -509,12 +523,12 @@ dialog::backdrop {
   background: rgb(0 0 0 / 55%);
 }
 
-#new-form {
+#new-form, #project-form {
   display: grid;
   gap: 10px;
 }
 
-#new-form label {
+#new-form label, #project-form label {
   display: grid;
   gap: 4px;
   font-size: 12px;
@@ -535,7 +549,7 @@ input:focus, select:focus {
   border-color: var(--active);
 }
 
-#new-form button {
+#new-form button, #project-form button {
   justify-self: end;
   font-weight: 700;
   color: var(--on-active);
@@ -544,20 +558,20 @@ input:focus, select:focus {
   cursor: pointer;
 }
 
-#new-form button:disabled {
+#new-form button:disabled, #project-form button:disabled {
   cursor: default;
   color: var(--faint);
   background: transparent;
   border-color: var(--line);
 }
 
-#new-message {
+#new-message, #project-message {
   margin: 0;
   font-size: 12px;
   color: var(--muted);
 }
 
-#new-message:empty {
+#new-message:empty, #project-message:empty {
   display: none;
 }
 

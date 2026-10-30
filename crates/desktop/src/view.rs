@@ -1,18 +1,17 @@
 //! What the page shows: the session list, built from each refresh.
 
+use std::path::Path;
+
 use claude_sessions_core::accounts::{SessionInfo, SessionState};
 use claude_sessions_core::refresher::Update;
 use claude_sessions_core::search::matches;
 use serde::Serialize;
 
-use crate::layout::SessionKey;
-
-/// Only the first nine sessions of the bar get a number: Alt+1..9.
-const NUMBERED: usize = 9;
+use crate::layout::{PaneId, SessionKey};
+use crate::tabs::Tabs;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SessionRow {
-    pub number: Option<usize>,
     pub title: String,
     pub account: String,
     pub directory: String,
@@ -20,6 +19,8 @@ pub struct SessionRow {
     pub short_id: Option<String>,
     pub state: &'static str,
     pub isolated: bool,
+    /// The tab the session belongs to: its project's, else "all". Set by `assign`.
+    pub tab: PaneId,
     pub unread: usize,
     /// Claude finished a turn here and it has not been looked at since.
     pub finished: bool,
@@ -60,13 +61,13 @@ fn finished(previous: &ListView, session: &SessionInfo, watched: Option<&Session
 
 fn row(position: usize, session: &SessionInfo, unread: usize, finished: bool) -> SessionRow {
     SessionRow {
-        number: None,
         title: session.title(),
         account: session.account.clone(),
         directory: session.cwd.clone(),
         short_id: session.short_id.clone(),
         state: session.state.label(),
         isolated: session.isolated,
+        tab: 0,
         unread,
         finished,
         info: session.clone(),
@@ -94,11 +95,15 @@ fn rank(row: &SessionRow) -> u8 {
     }
 }
 
-/// Sorts the rows by `rank`, in snapshot order within a rank, and numbers them.
+/// Sorts the rows by `rank`, in snapshot order within a rank.
 fn order(sessions: &mut [SessionRow]) {
     sessions.sort_by_key(|row| (rank(row), row.position));
-    for (index, row) in sessions.iter_mut().enumerate() {
-        row.number = (index < NUMBERED).then_some(index + 1);
+}
+
+/// Gives every row the tab of its project, after a refresh or a change of projects.
+pub fn assign(view: &mut ListView, tabs: &Tabs) {
+    for row in &mut view.sessions {
+        row.tab = tabs.owner_tab(Path::new(&row.directory));
     }
 }
 
@@ -153,6 +158,7 @@ mod tests {
     use claude_sessions_core::accounts::{SessionState, Snapshot};
 
     use super::*;
+    use crate::projects::Project;
 
     fn session(account: &str, name: &str, isolated: bool) -> SessionInfo {
         SessionInfo {
@@ -179,14 +185,11 @@ mod tests {
     }
 
     #[test]
-    fn rows_keep_the_snapshot_order_and_only_nine_get_a_number() {
+    fn rows_of_the_same_state_keep_the_snapshot_order() {
         let sessions = (0..10).map(|i| session("louis", &format!("s{i}"), false)).collect();
         let view = apply(&ListView::default(), Ok((snapshot(sessions), HashMap::new())), None);
         assert!(view.loaded);
         assert_eq!(view.sessions[0].title, "s0");
-        assert_eq!(view.sessions[0].number, Some(1));
-        assert_eq!(view.sessions[8].number, Some(9));
-        assert_eq!(view.sessions[9].number, None);
         assert_eq!(view.sessions[9].title, "s9");
     }
 
@@ -308,10 +311,6 @@ mod tests {
         assert!(!seen(&mut done, &key("louis", "a")), "nothing left to remove");
     }
 
-    fn numbers(view: &ListView) -> Vec<Option<usize>> {
-        view.sessions.iter().map(|row| row.number).collect()
-    }
-
     fn elsewhere(account: &str, name: &str) -> SessionInfo {
         SessionInfo { short_id: None, ..in_state(account, name, SessionState::Elsewhere) }
     }
@@ -331,7 +330,6 @@ mod tests {
         let unread = HashMap::from([("louis-mail".to_string(), 1)]);
         let view = apply(&previous, Ok((snapshot(sessions), unread)), None);
         assert_eq!(titles(&view.sessions), ["mail", "done", "waits", "busy", "asleep", "other-terminal"]);
-        assert_eq!(numbers(&view), [Some(1), Some(2), Some(3), Some(4), Some(5), Some(6)]);
     }
 
     #[test]
@@ -362,7 +360,23 @@ mod tests {
         assert_eq!(titles(&done.sessions), ["b", "a"]);
         assert!(seen(&mut done, &key("louis", "b")));
         assert_eq!(titles(&done.sessions), ["a", "b"]);
-        assert_eq!(numbers(&done), [Some(1), Some(2)]);
+    }
+
+    #[test]
+    fn rows_get_the_tab_of_their_project() {
+        let mut tabs = Tabs::default();
+        let all = tabs.active_tab();
+        tabs.add_project(Project::new("/home/u/Dev/api".into())).unwrap();
+        let api = tabs.active_tab();
+        let sessions = vec![
+            SessionInfo { cwd: "/home/u/Dev/api/src".into(), ..session("louis", "in", false) },
+            SessionInfo { cwd: "/home/u".into(), ..session("louis", "out", false) },
+        ];
+        let mut view = refresh(&ListView::default(), sessions, None);
+        assign(&mut view, &tabs);
+        let tab_of = |title: &str| view.sessions.iter().find(|row| row.title == title).map(|row| row.tab);
+        assert_eq!(tab_of("in"), Some(api));
+        assert_eq!(tab_of("out"), Some(all));
     }
 
     #[test]
