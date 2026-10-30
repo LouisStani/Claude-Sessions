@@ -2,7 +2,9 @@
 
 mod layout;
 mod pane;
+mod prefs;
 mod projects;
+mod store;
 mod tabs;
 mod view;
 
@@ -15,11 +17,13 @@ use claude_sessions_core::attach::attach_command;
 use claude_sessions_core::launcher::{self, Request, resolve_directory};
 use claude_sessions_core::{accounts, mailbox, refresher};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 use crate::layout::{PaneId, SessionKey, Shown};
 use crate::pane::Pane;
+use crate::prefs::Prefs;
 use crate::projects::Project;
 use crate::tabs::Tabs;
 use crate::view::{ListView, SessionRow};
@@ -41,11 +45,18 @@ struct Shared {
     /// Where the projects are kept, or why they cannot be: a file that did not load is
     /// never written over.
     projects_file: Result<PathBuf, String>,
+    /// The short names given to sessions, kept like the projects.
+    prefs: Mutex<Prefs>,
+    prefs_file: Result<PathBuf, String>,
 }
 
 impl Shared {
     fn workspace(&self) -> MutexGuard<'_, Workspace> {
         self.workspace.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn prefs(&self) -> Prefs {
+        self.prefs.lock().unwrap_or_else(PoisonError::into_inner).clone()
     }
 }
 
@@ -173,17 +184,38 @@ fn resize_split(shared: State<'_, Shared>, split: PaneId, ratio: f32) -> Tabs {
 
 fn save_projects(shared: &Shared, tabs: &Tabs) -> Result<(), String> {
     let path = shared.projects_file.as_ref()?;
-    projects::save(path, &tabs.projects()).map_err(|error| format!("cannot save {}: {error}", path.display()))
+    store::save(path, &tabs.projects()).map_err(|error| format!("cannot save {}: {error}", path.display()))
 }
 
-/// The projects changed: every session goes to its tab again.
+/// The projects or the names changed: every session gets its tab and name again.
 fn reassign(app: &AppHandle, shared: &Shared, tabs: &Tabs) {
+    let prefs = shared.prefs();
     let view = {
         let mut view = shared.view.lock().unwrap_or_else(PoisonError::into_inner);
-        view::assign(&mut view, tabs);
+        view::assign(&mut view, tabs, &prefs);
         view.clone()
     };
     let _ = app.emit("sessions", &view);
+}
+
+/// Gives the session a short name, kept in `sessions.json`; an empty one removes it.
+#[tauri::command]
+fn rename_session(app: AppHandle, shared: State<'_, Shared>, account: String, short_id: String, name: String) -> Result<(), String> {
+    let session_id = {
+        let view = shared.view.lock().unwrap_or_else(PoisonError::into_inner);
+        let row = view.sessions.iter().find(|row| row.account == account && row.short_id.as_deref() == Some(short_id.as_str()));
+        row.map(|row| row.info.session_id.clone()).ok_or_else(|| format!("no session {short_id}"))?
+    };
+    let path = shared.prefs_file.as_ref()?;
+    let mut prefs = shared.prefs.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut next = prefs.clone();
+    prefs::set_label(&mut next, &session_id, &name);
+    store::save(path, &next).map_err(|error| format!("cannot save {}: {error}", path.display()))?;
+    *prefs = next;
+    drop(prefs);
+    let tabs = shared.workspace().tabs.clone();
+    reassign(&app, &shared, &tabs);
+    Ok(())
 }
 
 /// A tab for the folder typed in the page, kept in `projects.json`.
@@ -314,10 +346,11 @@ fn resize_pane(shared: State<'_, Shared>, pane: PaneId, columns: u16, rows: u16)
 fn publish(app: &AppHandle, update: refresher::Update) -> bool {
     let shared = app.state::<Shared>();
     let tabs = shared.workspace().tabs.clone();
+    let prefs = shared.prefs();
     let view = {
         let mut current = shared.view.lock().unwrap_or_else(PoisonError::into_inner);
         let mut next = view::apply(&current, update, tabs.watched());
-        view::assign(&mut next, &tabs);
+        view::assign(&mut next, &tabs, &prefs);
         next.errors.splice(0..0, shared.startup_errors.iter().cloned());
         *current = next.clone();
         next
@@ -332,29 +365,38 @@ fn detach_on_exit(app: &AppHandle, event: RunEvent) {
     }
 }
 
-/// The tabs of the projects kept in `projects.json`, and where to keep them.
-fn load_projects(errors: &mut Vec<String>) -> (Tabs, Result<PathBuf, String>) {
+/// `name` in the data directory, read at startup, and where to save it: a file that did not
+/// load is reported and never written over.
+fn load_file<T: DeserializeOwned + Default>(name: &str, errors: &mut Vec<String>) -> (T, Result<PathBuf, String>) {
     let path = match mailbox::data_dir() {
-        Ok(directory) => directory.join("projects.json"),
+        Ok(directory) => directory.join(name),
         Err(error) => {
-            errors.push(format!("projects unavailable: {error}"));
-            return (Tabs::default(), Err(format!("projects unavailable: {error}")));
+            errors.push(format!("{name} unavailable: {error}"));
+            return (T::default(), Err(format!("{name} unavailable: {error}")));
         },
     };
-    match projects::load(&path) {
-        Ok(projects) => (Tabs::with_projects(projects), Ok(path)),
+    match store::load(&path) {
+        Ok(value) => (value, Ok(path)),
         Err(error) => {
-            errors.push(format!("projects not loaded: {error}"));
-            (Tabs::default(), Err(format!("{} did not load: fix or delete it", path.display())))
+            errors.push(format!("{name} not loaded: {error}"));
+            (T::default(), Err(format!("{} did not load: fix or delete it", path.display())))
         },
     }
 }
 
 fn main() -> ExitCode {
     let mut startup_errors: Vec<String> = accounts::check_launcher_version().err().map(|error| error.to_string()).into_iter().collect();
-    let (restored, projects_file) = load_projects(&mut startup_errors);
-    let workspace = Workspace { tabs: restored, ..Workspace::default() };
-    let shared = Shared { view: Mutex::new(ListView::default()), startup_errors, workspace: Mutex::new(workspace), projects_file };
+    let (projects, projects_file) = load_file::<Vec<Project>>("projects.json", &mut startup_errors);
+    let (prefs, prefs_file) = load_file::<Prefs>("sessions.json", &mut startup_errors);
+    let workspace = Workspace { tabs: Tabs::with_projects(projects), ..Workspace::default() };
+    let shared = Shared {
+        view: Mutex::new(ListView::default()),
+        startup_errors,
+        workspace: Mutex::new(workspace),
+        projects_file,
+        prefs: Mutex::new(prefs),
+        prefs_file,
+    };
     let built = tauri::Builder::default()
         .manage(shared)
         .invoke_handler(tauri::generate_handler![
@@ -370,6 +412,7 @@ fn main() -> ExitCode {
             focus_step,
             resize_split,
             add_project,
+            rename_session,
             close_tab,
             tab_step,
             go_tab,

@@ -2,7 +2,12 @@ use crate::accounts::SessionInfo;
 
 /// Every word of `query` must appear, case-insensitively, in the session's title, account or directory.
 pub fn matches(session: &SessionInfo, query: &str) -> bool {
-    let haystack = format!("{} {} {}", session.title(), session.account, session.cwd).to_lowercase();
+    matches_with(session, "", query)
+}
+
+/// Like `matches`, `extra` (a name given in an interface) counting as one more field.
+pub fn matches_with(session: &SessionInfo, extra: &str, query: &str) -> bool {
+    let haystack = format!("{} {} {} {extra}", session.title(), session.account, session.cwd).to_lowercase();
     query.to_lowercase().split_whitespace().all(|word| haystack.contains(word))
 }
 
@@ -28,5 +33,13 @@ mod tests {
         assert!(matches(&session("louis", "boss-fight", "/home/u/Roblox/frieren"), "ROB louis"));
         assert!(matches(&session("louis", "", "/home/u/Merkio"), "merkio"));
         assert!(!matches(&session("lystriq", "api", "/home/u/Pro/api"), "api louis"));
+    }
+
+    #[test]
+    fn an_extra_name_counts_with_the_other_fields() {
+        let api = session("lystriq", "Router CEO et flux", "/home/u/Pro/api");
+        assert!(matches_with(&api, "router", "ROUTER lystriq"));
+        assert!(matches_with(&api, "short", "short api"));
+        assert!(!matches(&api, "short"));
     }
 }

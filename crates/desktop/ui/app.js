@@ -16,7 +16,7 @@ function element(tag, className, text) {
 }
 
 function elsewhere(session) {
-  return `"${session.title}" runs in another terminal: it cannot be opened here`;
+  return `"${session.label}" runs in another terminal: it cannot be opened here`;
 }
 
 // A notice goes after 8 s. Errors of the list come first and stay as long as they last.
@@ -70,7 +70,7 @@ function markOf(tabId) {
 function sessionItem(session) {
   const item = element("li", "session");
   const title = element("div", "title");
-  title.append(element("span", "name", session.title));
+  title.append(element("span", "name", session.label));
   if (session.unread > 0) title.append(element("span", "badge", `${session.unread} msg`));
   if (session.finished) title.append(element("span", "done", "done"));
   const detail = [session.account, session.state];
@@ -85,7 +85,7 @@ function chip(session, index) {
   const item = element("li", `chip ${chipState(session)}`);
   item.append(element("span", "pos", index < 9 ? `${index + 1}` : ""));
   item.append(element("span", "dot", session.finished ? "✓" : ""));
-  item.append(element("span", "chip-title", session.title));
+  item.append(element("span", "chip-title", session.label));
   if (session.unread > 0) item.append(element("span", "badge", `${session.unread}`));
   if (panes.shows(session)) item.classList.add("open");
   item.addEventListener("click", () => openSession(session));
@@ -173,10 +173,14 @@ function isFinished(key) {
   return lastView.sessions.some((row) => row.finished && row.account === key.account && row.short_id === key.short_id);
 }
 
-// The title of a session shown in a pane, for the tab bar.
+function rowOf(key) {
+  return lastView.sessions.find((row) => row.account === key.account && row.short_id === key.short_id);
+}
+
+// The name of a session shown in a pane, for its head.
 function titleOf(key) {
-  const session = lastView.sessions.find((row) => row.account === key.account && row.short_id === key.short_id);
-  return session ? session.title : key.short_id;
+  const session = rowOf(key);
+  return session ? session.label : key.short_id;
 }
 
 // A session opens in the tab of its project: "all" only shows sessions of no project. A
@@ -272,6 +276,34 @@ async function closeTab() {
   }
 }
 
+function openRenameForm() {
+  const key = panes.activeSession();
+  const session = key && rowOf(key);
+  if (!session) {
+    setStatus("no session in this pane to name");
+    return;
+  }
+  const form = document.getElementById("rename-form");
+  form.dataset.account = session.account;
+  form.dataset.shortId = session.short_id;
+  form.elements.label.value = session.given ?? "";
+  document.getElementById("rename-message").textContent = "";
+  document.getElementById("rename").showModal();
+  form.elements.label.focus();
+}
+
+async function renameSession(event) {
+  event.preventDefault();
+  const form = event.target;
+  try {
+    await invoke("rename_session", { account: form.dataset.account, shortId: form.dataset.shortId, name: form.elements.label.value });
+  } catch (error) {
+    document.getElementById("rename-message").textContent = `${error}`;
+    return;
+  }
+  document.getElementById("rename").close();
+}
+
 function renderPicker() {
   const results = document.getElementById("picker-results");
   if (picker.rows.length === 0) {
@@ -331,6 +363,8 @@ function shortcutFor(event) {
   const alt = event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey;
   if (ctrl && event.code === "KeyN") return { run: openNewSessionForm };
   if (ctrl && event.code === "KeyP") return { run: openPicker };
+  const bare = !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey;
+  if (bare && event.code === "F2") return { run: openRenameForm };
   const digit = /^Digit([1-9])$/.exec(event.code);
   if (alt && digit) return { run: () => showNumber(Number(digit[1])) };
   if (ctrl && event.code === "KeyH") return { run: () => panes.step(-1) };
@@ -369,6 +403,7 @@ document.addEventListener("keydown", onKey);
 new ResizeObserver(fitChips).observe(document.getElementById("chips"));
 document.getElementById("new-form").addEventListener("submit", startNewSession);
 document.getElementById("project-form").addEventListener("submit", addProject);
+document.getElementById("rename-form").addEventListener("submit", renameSession);
 document.getElementById("picker-query").addEventListener("input", filterPicker);
 document.getElementById("picker-query").addEventListener("keydown", onPickerKey);
 for (const dialog of document.querySelectorAll("dialog")) {

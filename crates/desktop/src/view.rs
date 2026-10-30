@@ -5,10 +5,11 @@ use std::path::Path;
 use claude_sessions_core::accounts::{SessionInfo, SessionState};
 use claude_sessions_core::launcher::tilde;
 use claude_sessions_core::refresher::Update;
-use claude_sessions_core::search::matches;
+use claude_sessions_core::search::matches_with;
 use serde::Serialize;
 
 use crate::layout::{PaneId, SessionKey};
+use crate::prefs::{Prefs, short_title};
 use crate::projects::Project;
 use crate::tabs::Tabs;
 
@@ -17,7 +18,12 @@ const KNOWN: usize = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SessionRow {
+    /// Claude Code's name, whole.
     pub title: String,
+    /// What the bar shows: the short name given with F2, else `title` cut. Set by `assign`.
+    pub label: String,
+    /// The short name given with F2, if any, which the F2 form starts from.
+    pub given: Option<String>,
     pub account: String,
     pub directory: String,
     /// Only background sessions have one, and only they can be opened here.
@@ -67,6 +73,8 @@ fn finished(previous: &ListView, session: &SessionInfo, watched: Option<&Session
 fn row(position: usize, session: &SessionInfo, unread: usize, finished: bool) -> SessionRow {
     SessionRow {
         title: session.title(),
+        label: short_title(None, &session.title()),
+        given: None,
         account: session.account.clone(),
         directory: session.cwd.clone(),
         short_id: session.short_id.clone(),
@@ -105,10 +113,13 @@ fn order(sessions: &mut [SessionRow]) {
     sessions.sort_by_key(|row| (rank(row), row.position));
 }
 
-/// Gives every row the tab of its project, after a refresh or a change of projects.
-pub fn assign(view: &mut ListView, tabs: &Tabs) {
+/// Gives every row the tab of its project and its short name, after a refresh or a change of
+/// projects or names.
+pub fn assign(view: &mut ListView, tabs: &Tabs, prefs: &Prefs) {
     for row in &mut view.sessions {
         row.tab = tabs.owner_tab(Path::new(&row.directory));
+        row.given = prefs.get(&row.info.session_id).and_then(|kept| kept.label.clone());
+        row.label = short_title(row.given.as_deref(), &row.title);
     }
 }
 
@@ -170,7 +181,7 @@ pub fn known_directories(projects: &[Project], view: &ListView, home: &Path) -> 
 
 /// The rows Ctrl+P offers for `query`, in bar order.
 pub fn filter(view: &ListView, query: &str) -> Vec<SessionRow> {
-    view.sessions.iter().filter(|row| matches(&row.info, query)).cloned().collect()
+    view.sessions.iter().filter(|row| matches_with(&row.info, &row.label, query)).cloned().collect()
 }
 
 #[cfg(test)]
@@ -394,10 +405,26 @@ mod tests {
             SessionInfo { cwd: "/home/u".into(), ..session("louis", "out", false) },
         ];
         let mut view = refresh(&ListView::default(), sessions, None);
-        assign(&mut view, &tabs);
+        assign(&mut view, &tabs, &Prefs::new());
         let tab_of = |title: &str| view.sessions.iter().find(|row| row.title == title).map(|row| row.tab);
         assert_eq!(tab_of("in"), Some(api));
         assert_eq!(tab_of("out"), Some(all));
+    }
+
+    #[test]
+    fn a_given_short_name_is_shown_and_found() {
+        let sessions = vec![session("louis", "Router CEO et flux de données Overview", false), session("louis", "api", false)];
+        let mut view = refresh(&ListView::default(), sessions, None);
+        let mut prefs = Prefs::new();
+        crate::prefs::set_label(&mut prefs, "louis-api", "backend");
+        assign(&mut view, &Tabs::default(), &prefs);
+        let label_of = |title: &str| view.sessions.iter().find(|row| row.title == title).map(|row| row.label.clone());
+        assert_eq!(label_of("api").as_deref(), Some("backend"));
+        let given_of = |title: &str| view.sessions.iter().find(|row| row.title == title).and_then(|row| row.given.clone());
+        assert_eq!(given_of("api").as_deref(), Some("backend"));
+        assert_eq!(given_of("Router CEO et flux de données Overview"), None);
+        assert_eq!(label_of("Router CEO et flux de données Overview").as_deref(), Some("Router CEO et flux de…"));
+        assert_eq!(titles(&filter(&view, "backend")), ["api"]);
     }
 
     #[test]

@@ -24,7 +24,7 @@
       <label>account <select name="account"></select></label>
       <label>directory <input name="directory" spellcheck="false" autocomplete="off"></label>
       <ol class="suggestions" hidden></ol>
-      <label>name <input name="name" placeholder="chosen by Claude Code" spellcheck="false" autocomplete="off"></label>
+      <label>short name <input name="name" placeholder="e.g. router (else Claude Code picks one)" spellcheck="false" autocomplete="off"></label>
       <p id="new-message"></p>
       <button type="submit">start</button>
     </form>
@@ -36,6 +36,14 @@
       <ol class="suggestions" hidden></ol>
       <p id="project-message"></p>
       <button type="submit">add</button>
+    </form>
+  </dialog>
+  <dialog id="rename">
+    <form id="rename-form">
+      <h1>short name</h1>
+      <label>name <input name="label" placeholder="empty: Claude Code's name" spellcheck="false" autocomplete="off"></label>
+      <p id="rename-message"></p>
+      <button type="submit">save</button>
     </form>
   </dialog>
   <dialog id="picker">

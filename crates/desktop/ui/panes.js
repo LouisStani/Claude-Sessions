@@ -138,6 +138,13 @@ export class Panes {
     return this.activeTab().layout;
   }
 
+  // The session shown in the active pane of the visible tab, or null.
+  activeSession() {
+    const layout = this.layout();
+    const leaf = leaves(layout.root).find((node) => node.id === layout.active);
+    return leaf ? leaf.session : null;
+  }
+
   projectName(id) {
     const tab = this.state === null ? null : this.state.tabs.find((tab) => tab.id === id);
     return tab && tab.project ? tab.project.name : null;
