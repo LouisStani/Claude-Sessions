@@ -1,12 +1,42 @@
+@font-face {
+  font-family: "JetBrains Mono";
+  font-weight: 400;
+  src: url("vendor/JetBrainsMono-Regular.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-weight: 700;
+  src: url("vendor/JetBrainsMono-Bold.woff2") format("woff2");
+}
+
+/* The art direction. Rules below only use these variables, so a theme replaces this block. */
 :root {
-  --background: #111111;
-  --panel: #181818;
-  --border: #2a2a2a;
-  --text: #e0e0e0;
-  --muted: #8a8a8a;
-  --badge: #f0c060;
-  --done: #70c070;
-  --error: #e06060;
+  --font: "JetBrains Mono", ui-monospace, monospace;
+  --font-size: 13px;
+  --background: #1a0e06;
+  --surface: #24150b;
+  --raised: #2e1a0c;
+  --line: #3a2412;
+  --line-strong: #5c300f;
+  --text: #f6e7d4;
+  --text-strong: #fff6ea;
+  --muted: #d9bfa0;
+  --faint: #8a5a30;
+  --terminal: #1f120a;
+  --terminal-text: #f6e7d4;
+  --selection: #5c300f;
+  --active: #aa601f;
+  --on-active: #f6e7d4;
+  --waiting: #f2b544;
+  --working: #f6e7d4;
+  --done: #a8c66c;
+  --error: #e8735a;
+  --on-accent: #1a0e06;
+  --radius: 8px;
+  --radius-pane: 10px;
+  --stroke: 1.5px;
+  --gap: 10px;
   color-scheme: dark;
 }
 
@@ -20,7 +50,8 @@ body {
   display: flex;
   background: var(--background);
   color: var(--text);
-  font: 14px/1.4 system-ui, sans-serif;
+  font: var(--font-size)/1.4 var(--font);
+  scrollbar-color: var(--line-strong) transparent;
 }
 
 .list {
@@ -28,17 +59,19 @@ body {
   flex-shrink: 0;
   overflow-y: auto;
   padding: 12px;
-  background: var(--panel);
-  border-right: 1px solid var(--border);
+  border-right: var(--stroke) solid var(--line);
 }
 
 h1 {
   margin: 0 0 12px;
   font-size: 12px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--muted);
+  font-weight: 700;
+  color: var(--faint);
+}
+
+h1::before {
+  content: "~ $ ";
+  color: var(--waiting);
 }
 
 ol, ul {
@@ -49,11 +82,12 @@ ol, ul {
 
 .session {
   padding: 6px 8px;
-  border-radius: 6px;
+  border: var(--stroke) solid transparent;
+  border-radius: var(--radius);
 }
 
 .session + .session {
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 .title {
@@ -65,8 +99,8 @@ ol, ul {
 .number {
   width: 1ch;
   flex-shrink: 0;
-  color: var(--muted);
-  font-variant-numeric: tabular-nums;
+  color: var(--faint);
+  font-size: 11px;
 }
 
 .name {
@@ -79,24 +113,28 @@ ol, ul {
 
 .badge {
   flex-shrink: 0;
-  font-weight: 600;
-  color: var(--badge);
+  padding: 0 6px;
+  border-radius: 9px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--on-accent);
+  background: var(--waiting);
 }
 
 .done {
   flex-shrink: 0;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--done);
 }
 
 .detail {
   padding-left: calc(1ch + 8px);
-  font-size: 12px;
-  color: var(--muted);
+  font-size: 11px;
+  color: var(--faint);
 }
 
 .muted {
-  color: var(--muted);
+  color: var(--faint);
 }
 
 #errors {
@@ -114,12 +152,13 @@ ol, ul {
 }
 
 .openable:hover {
-  background: var(--border);
+  background: var(--surface);
+  border-color: var(--line);
 }
 
 .open {
-  background: var(--border);
-  box-shadow: inset 2px 0 0 var(--text);
+  background: var(--raised);
+  border-color: var(--active);
 }
 
 #workspace {
@@ -131,9 +170,8 @@ ol, ul {
 
 #tabs {
   display: flex;
-  gap: 2px;
-  padding: 4px 8px 0;
-  border-bottom: 1px solid var(--border);
+  gap: 6px;
+  padding: var(--gap) var(--gap) 0;
   overflow-x: auto;
 }
 
@@ -143,21 +181,25 @@ ol, ul {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  border: none;
-  border-radius: 6px 6px 0 0;
+  border: var(--stroke) solid var(--line-strong);
+  border-radius: var(--radius);
   background: transparent;
   color: var(--muted);
+  font-weight: 700;
+  cursor: pointer;
 }
 
 .tab.active {
-  background: var(--panel);
-  color: var(--text);
+  background: var(--active);
+  border-color: var(--active);
+  color: var(--on-active);
 }
 
 #panes {
   flex: 1;
   min-height: 0;
   display: flex;
+  padding: var(--gap);
 }
 
 .tab-page {
@@ -188,9 +230,14 @@ ol, ul {
   flex-direction: column;
 }
 
+/* A gap between two panes, which is also the handle that resizes them. */
 .divider {
-  flex: 0 0 4px;
-  background: var(--border);
+  flex: 0 0 var(--gap);
+  border-radius: 3px;
+}
+
+.divider:hover {
+  background: var(--line);
 }
 
 .split.row > .divider {
@@ -205,12 +252,73 @@ ol, ul {
   position: relative;
   min-width: 0;
   min-height: 0;
-  padding: 8px;
-  border: 1px solid transparent;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--terminal);
+  border: var(--stroke) solid var(--line);
+  border-radius: var(--radius-pane);
+}
+
+.pane-head {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  padding: 6px 12px;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  background: var(--raised);
+  border-bottom: var(--stroke) solid var(--line);
+}
+
+.prompt {
+  font-weight: 700;
+  color: var(--waiting);
+}
+
+.head-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.head-account {
+  color: var(--faint);
+}
+
+.head-done {
+  padding: 0 6px;
+  border-radius: 6px;
+  font-weight: 700;
+  color: var(--on-accent);
+  background: var(--done);
+}
+
+.head-done[hidden] {
+  display: none;
 }
 
 .pane.active {
-  border-color: var(--muted);
+  border-color: var(--active);
+}
+
+.pane.active .pane-head {
+  background: var(--active);
+  border-color: var(--active);
+}
+
+.pane.active .prompt {
+  color: var(--on-accent);
+}
+
+.pane.active .head-title {
+  color: var(--on-active);
+}
+
+.pane.active .head-account {
+  color: var(--on-active);
+  opacity: 0.75;
 }
 
 .pane.finished {
@@ -218,7 +326,9 @@ ol, ul {
 }
 
 .screen {
-  height: 100%;
+  flex: 1;
+  min-height: 0;
+  padding: 8px 10px;
 }
 
 .placeholder {
@@ -227,7 +337,8 @@ ol, ul {
   margin: 0;
   display: grid;
   place-items: center;
-  color: var(--muted);
+  color: var(--faint);
+  pointer-events: none;
 }
 
 .placeholder[hidden] {
@@ -237,7 +348,7 @@ ol, ul {
 #status {
   margin: 12px 0 0;
   font-size: 12px;
-  color: var(--badge);
+  color: var(--waiting);
 }
 
 #status:empty {
@@ -247,14 +358,14 @@ ol, ul {
 dialog {
   width: 480px;
   padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--panel);
+  border: var(--stroke) solid var(--line-strong);
+  border-radius: var(--radius-pane);
+  background: var(--raised);
   color: var(--text);
 }
 
 dialog::backdrop {
-  background: rgb(0 0 0 / 50%);
+  background: rgb(0 0 0 / 55%);
 }
 
 #new-form {
@@ -273,19 +384,30 @@ input, select, button {
   font: inherit;
   color: var(--text);
   background: var(--background);
-  border: 1px solid var(--border);
-  border-radius: 6px;
+  border: var(--stroke) solid var(--line);
+  border-radius: var(--radius);
   padding: 6px 8px;
 }
 
-button {
+input:focus, select:focus {
+  outline: none;
+  border-color: var(--active);
+}
+
+#new-form button {
   justify-self: end;
+  font-weight: 700;
+  color: var(--on-active);
+  background: var(--active);
+  border-color: var(--active);
   cursor: pointer;
 }
 
-button:disabled {
+#new-form button:disabled {
   cursor: default;
-  color: var(--muted);
+  color: var(--faint);
+  background: transparent;
+  border-color: var(--line);
 }
 
 #new-message {
@@ -309,5 +431,6 @@ button:disabled {
 }
 
 .selected {
-  background: var(--border);
+  background: var(--surface);
+  border-color: var(--active);
 }

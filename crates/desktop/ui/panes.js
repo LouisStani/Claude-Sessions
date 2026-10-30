@@ -14,6 +14,23 @@ function sameSession(key, session) {
   return key !== null && key.account === session.account && key.short_id === session.short_id;
 }
 
+// The terminal colors come from the art direction in style.css, so a theme changes them too.
+function terminalOptions() {
+  const style = getComputedStyle(document.documentElement);
+  const variable = (name) => style.getPropertyValue(name).trim();
+  return {
+    fontFamily: variable("--font"),
+    fontSize: 13,
+    theme: {
+      background: variable("--terminal"),
+      foreground: variable("--terminal-text"),
+      cursor: variable("--waiting"),
+      cursorAccent: variable("--terminal"),
+      selectionBackground: variable("--selection"),
+    },
+  };
+}
+
 function loadWebgl(terminal) {
   try {
     const webgl = new WebglAddon.WebglAddon();
@@ -34,10 +51,15 @@ class PaneView {
     this.lastEnded = null;
     this.used = false;
     this.element = element("div", "pane");
+    this.title = element("span", "head-title");
+    this.account = element("span", "head-account");
+    this.done = element("span", "head-done", "done");
+    const head = element("div", "pane-head");
+    head.append(element("span", "prompt", "~ $"), this.title, this.account, this.done);
     this.screen = element("div", "screen");
     this.placeholder = element("p", "placeholder", "select a session");
-    this.element.append(this.screen, this.placeholder);
-    this.terminal = new Terminal({ fontFamily: "monospace", fontSize: 14, theme: { background: "#111111" } });
+    this.element.append(head, this.screen, this.placeholder);
+    this.terminal = new Terminal(terminalOptions());
     this.fit = new FitAddon.FitAddon();
     this.terminal.loadAddon(this.fit);
     this.terminal.attachCustomKeyEventHandler(keyFilter);
@@ -55,6 +77,14 @@ class PaneView {
     loadWebgl(this.terminal);
     this.observer.observe(this.screen);
     this.fit.fit();
+  }
+
+  // The head names the session shown, and says when it finished a turn not looked at yet.
+  label(key, title, finished) {
+    this.title.textContent = key === null ? "empty" : title;
+    this.account.textContent = key === null ? "" : `· ${key.account}`;
+    this.done.hidden = !finished;
+    this.element.classList.toggle("finished", finished);
   }
 
   forward(command, args) {
@@ -168,11 +198,13 @@ export class Panes {
     this.onChange();
   }
 
-  // Marks the panes whose session finished a turn that has not been looked at.
+  // Names the session of every pane, and marks those that finished a turn not looked at.
   decorate() {
     if (this.state === null) return;
     for (const leaf of this.allLeaves()) {
-      this.view(leaf.id).element.classList.toggle("finished", leaf.session !== null && this.isFinished(leaf.session));
+      const key = leaf.session;
+      const title = key === null ? "" : this.titleOf(key);
+      this.view(leaf.id).label(key, title, key !== null && this.isFinished(key));
     }
   }
 

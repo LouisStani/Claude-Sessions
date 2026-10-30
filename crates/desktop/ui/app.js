@@ -228,6 +228,8 @@ for (const dialog of document.querySelectorAll("dialog")) {
   dialog.addEventListener("close", () => panes.focus());
 }
 
+// xterm measures its cells with the font it is given: it must be loaded first.
+await Promise.all([document.fonts.load('400 13px "JetBrains Mono"'), document.fonts.load('700 13px "JetBrains Mono"')]);
 await listen("pane-ended", (event) => panes.ended(event.payload));
 await listen("tabs", (event) => panes.render(event.payload));
 await listen("sessions", (event) => render(event.payload));
