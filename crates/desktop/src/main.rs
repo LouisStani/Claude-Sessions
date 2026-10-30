@@ -448,8 +448,17 @@ fn publish(app: &AppHandle, update: refresher::Update) -> bool {
         let mut next = view::apply(&current, update, tabs.watched());
         view::assign(&mut next, &tabs, &prefs);
         next.errors.splice(0..0, shared.startup_errors.iter().cloned());
-        *current = next.clone();
-        next
+        // The same list again (the 30-second refresh, mostly): the page has nothing to draw.
+        if next == *current {
+            None
+        } else {
+            *current = next.clone();
+            Some(next)
+        }
+    };
+    let Some(view) = view else {
+        shared.trace.record("list unchanged", start.elapsed());
+        return true;
     };
     let emitted = app.emit("sessions", &view).is_ok();
     shared.trace.record(&format!("list published ({} sessions)", view.sessions.len()), start.elapsed());

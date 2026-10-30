@@ -120,7 +120,8 @@ function hideTip() {
 }
 
 // Chips that do not fit are hidden from the end, where the sessions that need you least
-// are; "+N" opens Ctrl+P, which has them all.
+// are; "+N" opens Ctrl+P, which has them all. Chips never shrink, and hiding the last ones
+// does not move the first: two measures are enough.
 function fitChips() {
   const chips = document.getElementById("chips");
   const more = chips.querySelector(".more");
@@ -130,20 +131,17 @@ function fitChips() {
   more.hidden = true;
   // Not laid out yet: nothing to measure, every chip stays.
   if (chips.clientWidth === 0) return;
-  // The right edge of the last chip shown against the bar's, rather than scrollWidth, which
-  // engines round differently.
-  const edge = chips.getBoundingClientRect().right;
-  const overflows = () => {
-    const shown = [...chips.children].filter((item) => !item.hidden);
-    return shown.length > 0 && shown[shown.length - 1].getBoundingClientRect().right > edge + 0.5;
-  };
-  let hidden = 0;
-  while (overflows() && hidden < items.length) {
-    hidden += 1;
-    items[items.length - hidden].hidden = true;
-    more.hidden = false;
-    more.textContent = `+${hidden}`;
-  }
+  // Right edges rather than scrollWidth, which engines round differently.
+  const edge = chips.getBoundingClientRect().right + 0.5;
+  const rights = items.map((item) => item.getBoundingClientRect().right);
+  if (rights.length === 0 || rights[rights.length - 1] <= edge) return;
+  // "+N" as wide as it can get, after the gap between chips.
+  more.textContent = `+${items.length}`;
+  more.hidden = false;
+  const room = edge - more.getBoundingClientRect().width - parseFloat(getComputedStyle(chips).columnGap || "0");
+  const kept = rights.filter((right) => right <= room).length;
+  for (const item of items.slice(kept)) item.hidden = true;
+  more.textContent = `+${items.length - kept}`;
 }
 
 function renderChips(view) {

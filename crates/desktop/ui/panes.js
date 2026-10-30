@@ -12,6 +12,16 @@ function element(tag, className, text) {
   return node;
 }
 
+// Sets a text only when it changes: a write, even of the same text, makes the page lay out again.
+function setText(node, text) {
+  if (node.textContent !== text) node.textContent = text;
+}
+
+// What a tab's page is built from: its panes and splits, not the sessions shown in them.
+function shapeOf(node) {
+  return node.kind === "leaf" ? node.id : [node.direction, node.ratio, shapeOf(node.first), shapeOf(node.second)];
+}
+
 function sameSession(key, session) {
   return key !== null && key.account === session.account && key.short_id === session.short_id;
 }
@@ -83,8 +93,8 @@ class PaneView {
 
   // The head names the session shown, and says when it finished a turn not looked at yet.
   label(key, title, finished) {
-    this.title.textContent = key === null ? "empty" : title;
-    this.account.textContent = key === null ? "" : `· ${key.account}`;
+    setText(this.title, key === null ? "empty" : title);
+    setText(this.account, key === null ? "" : `· ${key.account}`);
     this.done.hidden = !finished;
     this.element.classList.toggle("finished", finished);
   }
@@ -125,6 +135,8 @@ export class Panes {
     this.markOf = markOf;
     this.state = null;
     this.views = new Map();
+    // Tab id → its page and the shape it was built for.
+    this.pages = new Map();
   }
 
   async load() {
@@ -169,17 +181,15 @@ export class Panes {
     return this.state !== null && this.allLeaves().some((leaf) => sameSession(leaf.session, session));
   }
 
-  draw(node, layout) {
+  draw(node) {
     if (node.kind === "leaf") {
       const view = this.view(node.id);
-      view.element.classList.toggle("active", node.id === layout.active);
-      view.placeholder.hidden = node.session !== null || view.used;
       view.element.onmousedown = () => this.focusPane(node.id);
       return view.element;
     }
     const split = element("div", `split ${node.direction}`);
-    const first = this.draw(node.first, layout);
-    const second = this.draw(node.second, layout);
+    const first = this.draw(node.first);
+    const second = this.draw(node.second);
     first.style.flex = `${node.ratio} 1 0px`;
     second.style.flex = `${1 - node.ratio} 1 0px`;
     const divider = element("div", "divider");
@@ -188,8 +198,31 @@ export class Panes {
     return split;
   }
 
+  // The page of a tab, built again only when its panes or splits change: otherwise its
+  // terminals stay where they are, since moving one makes it measure and draw again.
+  page(tab) {
+    const shape = JSON.stringify(shapeOf(tab.layout.root));
+    let built = this.pages.get(tab.id);
+    if (!built || built.shape !== shape) {
+      const page = built ? built.page : element("div", "tab-page");
+      const root = this.draw(tab.layout.root);
+      // A pane lifted to the root after a close still has the share it had in its split.
+      root.style.flex = "";
+      page.replaceChildren(root);
+      built = { page, shape };
+      this.pages.set(tab.id, built);
+    }
+    for (const leaf of leaves(tab.layout.root)) {
+      const view = this.view(leaf.id);
+      view.element.classList.toggle("active", leaf.id === tab.layout.active);
+      view.placeholder.hidden = leaf.session !== null || view.used;
+    }
+    built.page.hidden = tab.id !== this.state.active;
+    return built.page;
+  }
+
   // Every tab stays in the page, hidden ones with `display: none`: their terminals keep
-  // receiving output and are never moved.
+  // receiving output.
   render(state) {
     const start = performance.now();
     this.state = state;
@@ -200,16 +233,15 @@ export class Panes {
         this.views.delete(id);
       }
     }
-    const pages = state.tabs.map((tab) => {
-      const page = element("div", "tab-page");
-      page.hidden = tab.id !== state.active;
-      const root = this.draw(tab.layout.root, tab.layout);
-      // A pane lifted to the root after a close still has the share it had in its split.
-      root.style.flex = "";
-      page.append(root);
-      return page;
-    });
-    this.container.replaceChildren(...pages);
+    const tabIds = new Set(state.tabs.map((tab) => tab.id));
+    for (const id of this.pages.keys()) {
+      if (!tabIds.has(id)) this.pages.delete(id);
+    }
+    const pages = state.tabs.map((tab) => this.page(tab));
+    const shown = [...this.container.children];
+    if (pages.length !== shown.length || pages.some((page, index) => page !== shown[index])) {
+      this.container.replaceChildren(...pages);
+    }
     // xterm measures its cells when opened, so only panes on screen are opened; every pane
     // is created in the active tab.
     for (const leaf of leaves(this.layout().root)) this.view(leaf.id).openOnce();
