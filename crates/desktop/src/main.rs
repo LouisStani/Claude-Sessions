@@ -6,12 +6,14 @@ mod prefs;
 mod projects;
 mod store;
 mod tabs;
+mod trace;
 mod view;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use claude_sessions_core::attach::{attach_command, stop_command};
 use claude_sessions_core::launcher::{self, Request, resolve_directory};
@@ -26,6 +28,7 @@ use crate::pane::Pane;
 use crate::prefs::Prefs;
 use crate::projects::Project;
 use crate::tabs::Tabs;
+use crate::trace::Trace;
 use crate::view::{ListView, SessionRow};
 
 /// The tabs, their panes and the sessions attached in them. `generation` changes with every attach, so
@@ -48,6 +51,8 @@ struct Shared {
     /// The short names given to sessions, kept like the projects.
     prefs: Mutex<Prefs>,
     prefs_file: Result<PathBuf, String>,
+    /// Off unless `CLAUDE_SESSIONS_TRACE` is set.
+    trace: Trace,
 }
 
 impl Shared {
@@ -62,11 +67,13 @@ impl Shared {
 
 #[tauri::command]
 fn current_list(shared: State<'_, Shared>) -> ListView {
+    let _span = shared.trace.span("current_list");
     shared.view.lock().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
 #[tauri::command]
 fn filter_sessions(shared: State<'_, Shared>, tab: PaneId, query: String) -> Vec<SessionRow> {
+    let _span = shared.trace.span("filter_sessions");
     view::filter(&shared.view.lock().unwrap_or_else(PoisonError::into_inner), tab, &query)
 }
 
@@ -86,7 +93,8 @@ fn start_session(account: String, directory: &str, name: &str) -> Result<Created
 
 /// Starting a session takes a few seconds: it runs off the window's thread.
 #[tauri::command]
-async fn new_session(account: String, directory: String, name: String) -> Result<Created, String> {
+async fn new_session(shared: State<'_, Shared>, account: String, directory: String, name: String) -> Result<Created, String> {
+    let _span = shared.trace.span("new_session");
     tauri::async_runtime::spawn_blocking(move || start_session(account, &directory, &name))
         .await
         .map_err(|error| error.to_string())?
@@ -95,6 +103,7 @@ async fn new_session(account: String, directory: String, name: String) -> Result
 /// The folders a directory field offers before anything is typed.
 #[tauri::command]
 fn known_directories(shared: State<'_, Shared>) -> Vec<String> {
+    let _span = shared.trace.span("known_directories");
     let Some(home) = std::env::home_dir() else {
         return Vec::new();
     };
@@ -104,7 +113,8 @@ fn known_directories(shared: State<'_, Shared>) -> Vec<String> {
 
 /// The folders that can follow what is typed in a directory field.
 #[tauri::command]
-fn complete_directory(text: String) -> Vec<String> {
+fn complete_directory(shared: State<'_, Shared>, text: String) -> Vec<String> {
+    let _span = shared.trace.span("complete_directory");
     std::env::home_dir().map(|home| launcher::complete_directory(&text, &home)).unwrap_or_default()
 }
 
@@ -124,6 +134,7 @@ struct Opened {
 
 #[tauri::command]
 fn tabs(shared: State<'_, Shared>) -> Tabs {
+    let _span = shared.trace.span("tabs");
     shared.workspace().tabs.clone()
 }
 
@@ -146,6 +157,7 @@ fn respond(app: &AppHandle, shared: &Shared, workspace: MutexGuard<'_, Workspace
 
 #[tauri::command]
 fn split_pane(app: AppHandle, shared: State<'_, Shared>, width: f64, height: f64) -> Tabs {
+    let _span = shared.trace.span("split_pane");
     let mut workspace = shared.workspace();
     workspace.tabs.split(width, height);
     respond(&app, &shared, workspace)
@@ -153,6 +165,7 @@ fn split_pane(app: AppHandle, shared: State<'_, Shared>, width: f64, height: f64
 
 #[tauri::command]
 fn close_pane(app: AppHandle, shared: State<'_, Shared>) -> Tabs {
+    let _span = shared.trace.span("close_pane");
     let mut workspace = shared.workspace();
     if let Some(closed) = workspace.tabs.current_mut().close() {
         // Detaching only: the background session keeps running in Claude Code.
@@ -163,6 +176,7 @@ fn close_pane(app: AppHandle, shared: State<'_, Shared>) -> Tabs {
 
 #[tauri::command]
 fn focus_pane(app: AppHandle, shared: State<'_, Shared>, pane: PaneId) -> Tabs {
+    let _span = shared.trace.span("focus_pane");
     let mut workspace = shared.workspace();
     workspace.tabs.current_mut().focus(pane);
     respond(&app, &shared, workspace)
@@ -170,6 +184,7 @@ fn focus_pane(app: AppHandle, shared: State<'_, Shared>, pane: PaneId) -> Tabs {
 
 #[tauri::command]
 fn focus_step(app: AppHandle, shared: State<'_, Shared>, step: i64) -> Tabs {
+    let _span = shared.trace.span("focus_step");
     let mut workspace = shared.workspace();
     workspace.tabs.current_mut().focus_step(step);
     respond(&app, &shared, workspace)
@@ -177,6 +192,7 @@ fn focus_step(app: AppHandle, shared: State<'_, Shared>, step: i64) -> Tabs {
 
 #[tauri::command]
 fn resize_split(shared: State<'_, Shared>, split: PaneId, ratio: f32) -> Tabs {
+    let _span = shared.trace.span("resize_split");
     let mut workspace = shared.workspace();
     workspace.tabs.current_mut().set_ratio(split, ratio);
     workspace.tabs.clone()
@@ -224,6 +240,7 @@ fn update_prefs(app: &AppHandle, shared: &Shared, change: impl FnOnce(&mut Prefs
 /// Gives the session a short name, kept in `sessions.json`; an empty one removes it.
 #[tauri::command]
 fn rename_session(app: AppHandle, shared: State<'_, Shared>, account: String, short_id: String, name: String) -> Result<(), String> {
+    let _span = shared.trace.span("rename_session");
     let session_id = session_id_of(&shared, &account, &short_id)?;
     update_prefs(&app, &shared, |prefs| prefs::set_label(prefs, &session_id, &name))
 }
@@ -231,6 +248,7 @@ fn rename_session(app: AppHandle, shared: State<'_, Shared>, account: String, sh
 /// Stops the session (its conversation is kept) and hides it from the bar; its panes empty.
 #[tauri::command]
 async fn hide_session(app: AppHandle, shared: State<'_, Shared>, account: String, short_id: String) -> Result<Tabs, String> {
+    let _span = shared.trace.span("hide_session");
     let session_id = session_id_of(&shared, &account, &short_id)?;
     let (stop_account, stop_id) = (account.clone(), short_id.clone());
     let stopped = tauri::async_runtime::spawn_blocking(move || stop_command(&stop_account, &stop_id).output())
@@ -253,6 +271,7 @@ async fn hide_session(app: AppHandle, shared: State<'_, Shared>, account: String
 /// A hidden session comes back to the bar.
 #[tauri::command]
 fn show_session(app: AppHandle, shared: State<'_, Shared>, account: String, short_id: String) -> Result<(), String> {
+    let _span = shared.trace.span("show_session");
     let session_id = session_id_of(&shared, &account, &short_id)?;
     update_prefs(&app, &shared, |prefs| prefs::set_hidden(prefs, &session_id, false))
 }
@@ -260,6 +279,7 @@ fn show_session(app: AppHandle, shared: State<'_, Shared>, account: String, shor
 /// A tab for the folder typed in the page, kept in `projects.json`.
 #[tauri::command]
 fn add_project(app: AppHandle, shared: State<'_, Shared>, directory: String) -> Result<Tabs, String> {
+    let _span = shared.trace.span("add_project");
     let home = std::env::home_dir().ok_or("HOME is not set")?;
     let directory = resolve_directory(&directory, &home)?;
     let mut workspace = shared.workspace();
@@ -275,6 +295,7 @@ fn add_project(app: AppHandle, shared: State<'_, Shared>, directory: String) -> 
 /// Forgets the project of the active tab. Detaching only: its sessions keep running.
 #[tauri::command]
 fn close_tab(app: AppHandle, shared: State<'_, Shared>) -> Result<Tabs, String> {
+    let _span = shared.trace.span("close_tab");
     let mut workspace = shared.workspace();
     let mut next = workspace.tabs.clone();
     let Some(panes) = next.close_tab() else {
@@ -292,6 +313,7 @@ fn close_tab(app: AppHandle, shared: State<'_, Shared>) -> Result<Tabs, String> 
 
 #[tauri::command]
 fn tab_step(app: AppHandle, shared: State<'_, Shared>, step: i64) -> Tabs {
+    let _span = shared.trace.span("tab_step");
     let mut workspace = shared.workspace();
     workspace.tabs.step(step);
     respond(&app, &shared, workspace)
@@ -299,6 +321,7 @@ fn tab_step(app: AppHandle, shared: State<'_, Shared>, step: i64) -> Tabs {
 
 #[tauri::command]
 fn go_tab(app: AppHandle, shared: State<'_, Shared>, number: usize) -> Tabs {
+    let _span = shared.trace.span("go_tab");
     let mut workspace = shared.workspace();
     workspace.tabs.go(number);
     respond(&app, &shared, workspace)
@@ -334,6 +357,7 @@ fn open_session(
     rows: u16,
     output: Channel<InvokeResponseBody>,
 ) -> Result<Opened, String> {
+    let _span = shared.trace.span("open_session");
     let mut workspace = shared.workspace();
     let key = SessionKey { account: account.clone(), short_id: short_id.clone() };
     match workspace.tabs.show(pane, key) {
@@ -341,15 +365,23 @@ fn open_session(
         Some(Shown::Already(_)) => return Ok(Opened { tabs: respond(&app, &shared, workspace), generation: None }),
         Some(Shown::Attach) => {},
     }
-    workspace.attached.remove(&pane);
+    {
+        let _span = shared.trace.span("detach previous");
+        workspace.attached.remove(&pane);
+    }
     workspace.generation += 1;
     let generation = workspace.generation;
     let ended = app.clone();
+    let traced = app.clone();
+    let mut first_output = Some((Instant::now(), format!("attach {short_id} first output")));
     let opened = Pane::open(
         &attach_command(&account, &short_id),
         columns,
         rows,
         move |bytes| {
+            if let Some((start, what)) = first_output.take() {
+                traced.state::<Shared>().trace.record(&what, start.elapsed());
+            }
             // Fails only once the page has dropped this channel for a newer session.
             let _ = output.send(InvokeResponseBody::Raw(bytes.to_vec()));
         },
@@ -368,6 +400,18 @@ fn open_session(
     }
 }
 
+/// Whether the page measures too: it asks once, when it loads.
+#[tauri::command]
+fn trace_enabled(shared: State<'_, Shared>) -> bool {
+    shared.trace.enabled()
+}
+
+/// A timing measured by the page.
+#[tauri::command]
+fn trace(shared: State<'_, Shared>, what: String, ms: f64) {
+    shared.trace.record(&what, Duration::from_secs_f64(ms.max(0.0) / 1000.0));
+}
+
 #[tauri::command]
 fn write_input(shared: State<'_, Shared>, pane: PaneId, data: String) -> Result<(), String> {
     let mut workspace = shared.workspace();
@@ -384,6 +428,12 @@ fn resize_pane(shared: State<'_, Shared>, pane: PaneId, columns: u16, rows: u16)
 
 fn publish(app: &AppHandle, update: refresher::Update) -> bool {
     let shared = app.state::<Shared>();
+    let start = Instant::now();
+    if let Ok((snapshot, _)) = &update {
+        for (account, took) in &snapshot.timings {
+            shared.trace.record(&format!("agents {account}"), *took);
+        }
+    }
     let tabs = shared.workspace().tabs.clone();
     let prefs = shared.prefs();
     let view = {
@@ -394,7 +444,9 @@ fn publish(app: &AppHandle, update: refresher::Update) -> bool {
         *current = next.clone();
         next
     };
-    app.emit("sessions", &view).is_ok()
+    let emitted = app.emit("sessions", &view).is_ok();
+    shared.trace.record(&format!("list published ({} sessions)", view.sessions.len()), start.elapsed());
+    emitted
 }
 
 /// Leaves no `claude attach` behind when the window closes.
@@ -423,8 +475,25 @@ fn load_file<T: DeserializeOwned + Default>(name: &str, errors: &mut Vec<String>
     }
 }
 
+/// `trace.log` in the data directory when `CLAUDE_SESSIONS_TRACE` is set; a trace that cannot
+/// be opened is reported, and the app runs without it.
+fn open_trace(errors: &mut Vec<String>) -> Trace {
+    if std::env::var_os(trace::VARIABLE).is_none_or(|value| value.is_empty()) {
+        return Trace::off();
+    }
+    match mailbox::data_dir().and_then(|directory| Trace::open(&directory.join("trace.log"))) {
+        Ok(trace) => trace,
+        Err(error) => {
+            errors.push(format!("trace.log unavailable: {error}"));
+            Trace::off()
+        },
+    }
+}
+
 fn main() -> ExitCode {
-    let mut startup_errors: Vec<String> = accounts::check_launcher_version().err().map(|error| error.to_string()).into_iter().collect();
+    let mut startup_errors = Vec::new();
+    let timings = open_trace(&mut startup_errors);
+    startup_errors.extend(accounts::check_launcher_version().err().map(|error| error.to_string()));
     let (projects, projects_file) = load_file::<Vec<Project>>("projects.json", &mut startup_errors);
     let (prefs, prefs_file) = load_file::<Prefs>("sessions.json", &mut startup_errors);
     let workspace = Workspace { tabs: Tabs::with_projects(projects), ..Workspace::default() };
@@ -435,6 +504,7 @@ fn main() -> ExitCode {
         projects_file,
         prefs: Mutex::new(prefs),
         prefs_file,
+        trace: timings,
     };
     let built = tauri::Builder::default()
         .manage(shared)
@@ -458,6 +528,8 @@ fn main() -> ExitCode {
             tab_step,
             go_tab,
             open_session,
+            trace_enabled,
+            trace,
             write_input,
             resize_pane
         ])

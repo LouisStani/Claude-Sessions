@@ -2,6 +2,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use claude_accounts::{Paths, launch, registry};
 use serde::Deserialize;
@@ -185,6 +186,8 @@ pub struct Snapshot {
     /// Sorted by account, then title, so list positions (Alt+1..9) stay stable.
     pub sessions: Vec<SessionInfo>,
     pub errors: Vec<String>,
+    /// How long `claude agents --json` took, by account.
+    pub timings: Vec<(String, Duration)>,
 }
 
 pub fn sort_sessions(sessions: &mut [SessionInfo]) {
@@ -204,21 +207,31 @@ pub fn snapshot() -> io::Result<Snapshot> {
         .cloned()
         .map(|account| {
             let paths = paths.clone();
-            thread::spawn(move || (account.clone(), account_sessions(&paths, &account)))
+            thread::spawn(move || {
+                let start = Instant::now();
+                let found = account_sessions(&paths, &account);
+                (account, start.elapsed(), found)
+            })
         })
         .collect();
     let mut sessions = Vec::new();
     let mut errors = Vec::new();
+    let mut timings = Vec::new();
     for handle in handles {
         match handle.join() {
-            Ok((_, Ok(found))) => sessions.extend(found),
-            Ok((account, Err(error))) => errors.push(format!("{account}: {error}")),
+            Ok((account, took, found)) => {
+                match found {
+                    Ok(found) => sessions.extend(found),
+                    Err(error) => errors.push(format!("{account}: {error}")),
+                }
+                timings.push((account, took));
+            },
             Err(_) => errors.push("account query thread panicked".to_string()),
         }
     }
     mark_isolated(&mut sessions, &isolated);
     sort_sessions(&mut sessions);
-    Ok(Snapshot { accounts, isolated, sessions, errors })
+    Ok(Snapshot { accounts, isolated, sessions, errors, timings })
 }
 
 #[cfg(test)]

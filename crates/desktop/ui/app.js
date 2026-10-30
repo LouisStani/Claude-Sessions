@@ -1,5 +1,6 @@
 import { DirectoryField } from "./directories.js";
 import { Panes } from "./panes.js";
+import { mark, startTrace, traced } from "./trace.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
@@ -89,7 +90,7 @@ function chip(session, index) {
   item.append(element("span", "chip-title", session.label));
   if (session.unread > 0) item.append(element("span", "badge", `${session.unread}`));
   if (panes.shows(session)) item.classList.add("open");
-  item.addEventListener("click", () => openSession(session));
+  item.addEventListener("click", () => traced("chip click", () => openSession(session)));
   item.addEventListener("mouseenter", () => showTip(session, item));
   item.addEventListener("mouseleave", hideTip);
   return item;
@@ -162,11 +163,13 @@ function renderChips(view) {
 }
 
 function render(view) {
+  const start = performance.now();
   lastView = view;
   renderChips(view);
   renderStatus();
   panes.renderBar();
   panes.decorate();
+  mark("render sessions", start);
 }
 
 // Claude finished a turn in this session and it has not been looked at since.
@@ -202,7 +205,7 @@ function showNumber(number) {
     setStatus(`no session #${number}`);
     return;
   }
-  openSession(session);
+  return openSession(session);
 }
 
 function openNewSessionForm() {
@@ -425,12 +428,19 @@ function shortcutFor(event) {
   return null;
 }
 
+// "ctrl+shift+t", "alt+3", "f2": how a shortcut is named in the trace.
+function keyName(event) {
+  const modifiers = [event.ctrlKey && "ctrl", event.shiftKey && "shift", event.altKey && "alt"].filter(Boolean);
+  const key = event.code.replace(/^(Key|Digit)/, "").toLowerCase();
+  return [...modifiers, key].join("+");
+}
+
 function onKey(event) {
   const shortcut = shortcutFor(event);
   if (!shortcut) return;
   event.preventDefault();
   if (document.querySelector("dialog[open]")) return;
-  shortcut.run();
+  traced(`key ${keyName(event)}`, shortcut.run);
 }
 
 const panes = new Panes(document.getElementById("panes"), document.getElementById("tabs"), {
@@ -459,8 +469,11 @@ for (const dialog of document.querySelectorAll("dialog")) {
 
 // xterm measures its cells with the font it is given: it must be loaded first.
 await Promise.all([document.fonts.load('400 13px "JetBrains Mono"'), document.fonts.load('700 13px "JetBrains Mono"')]);
+await startTrace();
 await listen("pane-ended", (event) => panes.ended(event.payload));
 await listen("tabs", (event) => panes.render(event.payload));
 await listen("sessions", (event) => render(event.payload));
 await panes.load();
 render(await invoke("current_list"));
+// Since the page started loading.
+mark("page ready", 0);

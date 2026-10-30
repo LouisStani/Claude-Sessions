@@ -1,6 +1,8 @@
 // The tabs and panes on the right. Rust owns them (tabs.rs, layout.rs): every change is a
 // command, and this module only draws what it gets back.
 
+import { mark } from "./trace.js";
+
 const { invoke, Channel } = window.__TAURI__.core;
 
 function element(tag, className, text) {
@@ -189,6 +191,7 @@ export class Panes {
   // Every tab stays in the page, hidden ones with `display: none`: their terminals keep
   // receiving output and are never moved.
   render(state) {
+    const start = performance.now();
     this.state = state;
     const ids = new Set(this.allLeaves().map((leaf) => leaf.id));
     for (const [id, view] of this.views) {
@@ -214,6 +217,7 @@ export class Panes {
     this.decorate();
     this.focus();
     this.onChange();
+    mark("render panes", start);
   }
 
   // Names the session of every pane, and marks those that finished a turn not looked at.
@@ -312,6 +316,7 @@ export class Panes {
   // Shows `session` in the active pane. If a pane of any tab shows it already, Rust brings
   // that tab and pane to the front instead.
   async open(session) {
+    const start = performance.now();
     const view = this.active();
     const request = {
       pane: view.id,
@@ -329,8 +334,11 @@ export class Panes {
     const opening = { output, generation: null, ended: false };
     view.current = opening;
     view.used = true;
+    let shown = false;
     output.onmessage = (bytes) => {
-      if (view.current === opening) view.terminal.write(new Uint8Array(bytes));
+      if (view.current !== opening) return;
+      view.terminal.write(new Uint8Array(bytes), shown ? undefined : () => mark("first output shown", start));
+      shown = true;
     };
     view.placeholder.hidden = true;
     view.terminal.reset();

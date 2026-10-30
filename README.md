@@ -132,6 +132,8 @@ cargo run -p claude-sessions-desktop
 
 On Linux the desktop interface needs WebKitGTK 4.1 (`webkit2gtk-4.1` on Arch).
 
+To find where a delay comes from, start the desktop interface with `CLAUDE_SESSIONS_TRACE=1`: it writes `trace.log` next to the mailbox, started over at each launch, one line per timing (time since launch, what, how long): every command, the first output of an attached session, `claude agents --json` per account, each published list, and in the page each shortcut, chip click, render and first output shown.
+
 The icon is drawn in `crates/desktop/icons/icon.svg`. After changing it, regenerate the PNG and the Windows ICO (needs librsvg and ImageMagick):
 
 ```sh
