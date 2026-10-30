@@ -159,6 +159,12 @@ export class Panes {
     this.pages = new Map();
   }
 
+  // The terminals take the colors of the theme just applied.
+  retheme() {
+    const { theme } = terminalOptions();
+    for (const view of this.views.values()) view.terminal.options.theme = theme;
+  }
+
   async load() {
     this.render(await invoke("tabs"));
   }

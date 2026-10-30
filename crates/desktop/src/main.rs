@@ -5,6 +5,7 @@ mod messages;
 mod pane;
 mod prefs;
 mod projects;
+mod settings;
 mod store;
 mod tabs;
 mod trace;
@@ -30,6 +31,7 @@ use crate::messages::MessageRow;
 use crate::pane::Pane;
 use crate::prefs::Prefs;
 use crate::projects::Project;
+use crate::settings::Settings;
 use crate::tabs::{Saved, Tabs};
 use crate::trace::Trace;
 use crate::view::{ListView, SessionRow};
@@ -58,6 +60,9 @@ struct Shared {
     /// `saved` is what the file holds now.
     workspace_file: Result<PathBuf, String>,
     saved: Mutex<Saved>,
+    /// The theme chosen, kept like the projects.
+    settings: Mutex<Settings>,
+    settings_file: Result<PathBuf, String>,
     /// Off unless `CLAUDE_SESSIONS_TRACE` is set.
     trace: Trace,
 }
@@ -482,6 +487,34 @@ fn drop_restore(app: AppHandle, shared: State<'_, Shared>) -> Tabs {
     respond(&app, &shared, workspace)
 }
 
+#[tauri::command]
+fn settings(shared: State<'_, Shared>) -> Settings {
+    shared.settings.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+/// The theme chosen with Ctrl+Shift+E, saved before it counts.
+#[tauri::command]
+fn set_theme(shared: State<'_, Shared>, name: String) -> Result<(), String> {
+    let path = shared.settings_file.as_ref()?;
+    let mut settings = shared.settings.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut next = settings.clone();
+    next.theme = Some(name);
+    store::save(path, &next).map_err(|error| format!("cannot save {}: {error}", path.display()))?;
+    *settings = next;
+    Ok(())
+}
+
+/// The colors of `theme.json`, read again each time it is chosen; None without the file.
+#[tauri::command(async)]
+fn custom_theme() -> Result<Option<std::collections::BTreeMap<String, String>>, String> {
+    let path = mailbox::data_dir().map_err(|error| error.to_string())?.join("theme.json");
+    match std::fs::read_to_string(&path) {
+        Ok(json) => settings::custom_theme(&json).map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("cannot read {}: {error}", path.display())),
+    }
+}
+
 /// Whether the page measures too: it asks once, when it loads.
 #[tauri::command]
 fn trace_enabled(shared: State<'_, Shared>) -> bool {
@@ -588,6 +621,7 @@ fn main() -> ExitCode {
     let (projects, projects_file) = load_file::<Vec<Project>>("projects.json", &mut startup_errors);
     let (prefs, prefs_file) = load_file::<Prefs>("sessions.json", &mut startup_errors);
     let (saved, workspace_file) = load_file::<Saved>("workspace.json", &mut startup_errors);
+    let (chosen, settings_file) = load_file::<Settings>("settings.json", &mut startup_errors);
     let mut restored = Tabs::with_projects(projects);
     restored.restore(&saved);
     let workspace = Workspace { tabs: restored, ..Workspace::default() };
@@ -600,6 +634,8 @@ fn main() -> ExitCode {
         prefs_file,
         workspace_file,
         saved: Mutex::new(saved),
+        settings: Mutex::new(chosen),
+        settings_file,
         trace: timings,
     };
     let built = tauri::Builder::default()
@@ -626,6 +662,9 @@ fn main() -> ExitCode {
             go_tab,
             open_session,
             drop_restore,
+            settings,
+            set_theme,
+            custom_theme,
             trace_enabled,
             trace,
             write_input,

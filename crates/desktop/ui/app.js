@@ -1,11 +1,13 @@
 import { DirectoryField } from "./directories.js";
 import { Panes, sameSession } from "./panes.js";
+import { applyTheme, nextTheme, THEMES } from "./themes.js";
 import { mark, startTrace, traced } from "./trace.js";
 
 const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
 let lastView = { loaded: false, accounts: [], sessions: [], errors: [] };
+let currentTheme = "ember";
 const picker = { rows: [], selected: 0, query: 0 };
 const status = { notice: "", timer: null };
 
@@ -317,6 +319,45 @@ function openActiveMessages() {
   return openMessages(session);
 }
 
+// The colors of theme `name`; custom ones are read from theme.json each time.
+async function themeColors(name) {
+  if (name !== "custom") return THEMES[name] ?? THEMES.ember;
+  const colors = await invoke("custom_theme");
+  if (!colors) throw new Error("no theme.json");
+  return { ...THEMES.ember, ...colors };
+}
+
+async function showTheme(name) {
+  applyTheme(name, await themeColors(name));
+  panes.retheme();
+}
+
+// Ctrl+Shift+E: the next theme, kept for the next launch. A theme.json that does not load
+// is reported and skipped at the next press.
+async function cycleTheme() {
+  let custom;
+  try {
+    custom = await invoke("custom_theme");
+  } catch (error) {
+    custom = error;
+  }
+  const name = nextTheme(currentTheme, custom !== null);
+  currentTheme = name;
+  try {
+    await showTheme(name);
+  } catch (error) {
+    setStatus(`${error}`);
+    return;
+  }
+  try {
+    await invoke("set_theme", { name });
+  } catch (error) {
+    setStatus(`${error}`);
+    return;
+  }
+  setStatus(`theme: ${name}`);
+}
+
 function openNewSessionForm() {
   const form = document.getElementById("new-form");
   const fields = form.elements;
@@ -536,6 +577,7 @@ function shortcutFor(event) {
   if (ctrlShift && event.code === "KeyX") return { run: closeTab };
   if (ctrlShift && event.code === "KeyK") return { run: confirmHide };
   if (ctrlShift && event.code === "KeyM") return { run: openActiveMessages };
+  if (ctrlShift && event.code === "KeyE") return { run: cycleTheme };
   if (ctrlShift && event.code === "KeyH") return { run: () => panes.tabStep(-1) };
   if (ctrlShift && event.code === "KeyL") return { run: () => panes.tabStep(1) };
   if (ctrlShift && digit) return { run: () => panes.goTab(Number(digit[1])) };
@@ -585,6 +627,13 @@ for (const dialog of document.querySelectorAll("dialog")) {
 // xterm measures its cells with the font it is given: it must be loaded first.
 await Promise.all([document.fonts.load('400 13px "JetBrains Mono"'), document.fonts.load('700 13px "JetBrains Mono"')]);
 await startTrace();
+// Before the first terminal, which takes its colors when created.
+currentTheme = (await invoke("settings")).theme ?? "ember";
+try {
+  await showTheme(currentTheme);
+} catch (error) {
+  setStatus(`theme ${currentTheme}: ${error}`);
+}
 await listen("pane-ended", (event) => panes.ended(event.payload));
 await listen("tabs", (event) => panes.render(event.payload));
 await listen("sessions", (event) => render(event.payload));

@@ -361,6 +361,16 @@ ol, ul {
   opacity: 0.75;
 }
 
+/* On the active tab's own color, its mark takes the color of its text. */
+.tab.active .dot {
+  box-shadow: 0 0 0 var(--stroke) var(--on-active);
+}
+
+.tab.active.finished .dot {
+  color: var(--on-active);
+  box-shadow: none;
+}
+
 #panes {
   flex: 1;
   min-height: 0;
