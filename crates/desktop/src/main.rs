@@ -1,10 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod layout;
 mod pane;
 mod view;
 
+use std::collections::HashMap;
 use std::process::ExitCode;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use claude_sessions_core::attach::attach_command;
 use claude_sessions_core::launcher::{self, Request, resolve_directory};
@@ -13,27 +15,29 @@ use serde::Serialize;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
+use crate::layout::{Layout, PaneId, SessionKey, Shown};
 use crate::pane::Pane;
 use crate::view::{ListView, SessionRow};
 
-/// The session shown on the right. `generation` changes with every session opened, so the
-/// page can ignore the end of a session it no longer shows.
+/// The panes and the sessions attached in them. `generation` changes with every attach, so
+/// the end of a session that was since replaced in its pane is ignored.
 #[derive(Default)]
-struct PaneSlot {
+struct Workspace {
+    layout: Layout,
     generation: u64,
-    pane: Option<Pane>,
+    attached: HashMap<PaneId, (u64, Pane)>,
 }
 
 struct Shared {
     view: Mutex<ListView>,
     /// Problems found at startup, shown above every list since a refresh cannot fix them.
     startup_errors: Vec<String>,
-    slot: Mutex<PaneSlot>,
+    workspace: Mutex<Workspace>,
 }
 
 impl Shared {
-    fn slot(&self) -> std::sync::MutexGuard<'_, PaneSlot> {
-        self.slot.lock().unwrap_or_else(PoisonError::into_inner)
+    fn workspace(&self) -> MutexGuard<'_, Workspace> {
+        self.workspace.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
@@ -69,22 +73,104 @@ async fn new_session(account: String, directory: String, name: String) -> Result
         .map_err(|error| error.to_string())?
 }
 
-/// Replaces the session on the right; the one shown before is detached, not stopped.
+#[derive(Clone, Serialize)]
+struct Ended {
+    pane: PaneId,
+    generation: u64,
+}
+
+/// What `open_session` did. `generation` is None when the session was already shown: the
+/// pane showing it now has the focus.
+#[derive(Serialize)]
+struct Opened {
+    layout: Layout,
+    generation: Option<u64>,
+}
+
 #[tauri::command]
+fn layout(shared: State<'_, Shared>) -> Layout {
+    shared.workspace().layout.clone()
+}
+
+#[tauri::command]
+fn split_pane(shared: State<'_, Shared>, width: f64, height: f64) -> Layout {
+    let mut workspace = shared.workspace();
+    workspace.layout.split(width, height);
+    workspace.layout.clone()
+}
+
+#[tauri::command]
+fn close_pane(shared: State<'_, Shared>) -> Layout {
+    let mut workspace = shared.workspace();
+    if let Some(closed) = workspace.layout.close() {
+        // Detaching only: the background session keeps running in Claude Code.
+        workspace.attached.remove(&closed);
+    }
+    workspace.layout.clone()
+}
+
+#[tauri::command]
+fn focus_pane(shared: State<'_, Shared>, pane: PaneId) -> Layout {
+    let mut workspace = shared.workspace();
+    workspace.layout.focus(pane);
+    workspace.layout.clone()
+}
+
+#[tauri::command]
+fn focus_step(shared: State<'_, Shared>, step: i64) -> Layout {
+    let mut workspace = shared.workspace();
+    workspace.layout.focus_step(step);
+    workspace.layout.clone()
+}
+
+#[tauri::command]
+fn resize_split(shared: State<'_, Shared>, split: PaneId, ratio: f32) -> Layout {
+    let mut workspace = shared.workspace();
+    workspace.layout.set_ratio(split, ratio);
+    workspace.layout.clone()
+}
+
+/// A session ended by itself: its pane is emptied, unless another session was opened there since.
+fn end_session(app: &AppHandle, pane: PaneId, generation: u64) {
+    let shared = app.state::<Shared>();
+    let layout = {
+        let mut workspace = shared.workspace();
+        if workspace.attached.get(&pane).map(|(current, _)| *current) != Some(generation) {
+            return;
+        }
+        workspace.attached.remove(&pane);
+        workspace.layout.clear(pane);
+        workspace.layout.clone()
+    };
+    let _ = app.emit("pane-ended", Ended { pane, generation });
+    let _ = app.emit("layout", &layout);
+}
+
+/// Shows a session in `pane`, unless another pane already shows it. The session shown
+/// there before is detached, not stopped.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
 fn open_session(
     app: AppHandle,
     shared: State<'_, Shared>,
+    pane: PaneId,
     account: String,
     short_id: String,
     columns: u16,
     rows: u16,
     output: Channel<InvokeResponseBody>,
-) -> Result<u64, String> {
-    let mut slot = shared.slot();
-    slot.pane = None;
-    slot.generation += 1;
-    let generation = slot.generation;
-    let pane = Pane::open(
+) -> Result<Opened, String> {
+    let mut workspace = shared.workspace();
+    let key = SessionKey { account: account.clone(), short_id: short_id.clone() };
+    match workspace.layout.show(pane, key) {
+        None => return Err(format!("no pane {pane}")),
+        Some(Shown::Already(_)) => return Ok(Opened { layout: workspace.layout.clone(), generation: None }),
+        Some(Shown::Attach) => {},
+    }
+    workspace.attached.remove(&pane);
+    workspace.generation += 1;
+    let generation = workspace.generation;
+    let opened = Pane::open(
         &attach_command(&account, &short_id),
         columns,
         rows,
@@ -92,27 +178,33 @@ fn open_session(
             // Fails only once the page has dropped this channel for a newer session.
             let _ = output.send(InvokeResponseBody::Raw(bytes.to_vec()));
         },
-        move || {
-            let _ = app.emit("pane-ended", generation);
+        // Waits for the lock held here, so it always sees this attach recorded.
+        move || end_session(&app, pane, generation),
+    );
+    match opened {
+        Ok(attached) => {
+            workspace.attached.insert(pane, (generation, attached));
+            Ok(Opened { layout: workspace.layout.clone(), generation: Some(generation) })
         },
-    )
-    .map_err(|error| format!("cannot open {short_id}: {error}"))?;
-    slot.pane = Some(pane);
-    Ok(generation)
+        Err(error) => {
+            workspace.layout.clear(pane);
+            Err(format!("cannot open {short_id}: {error}"))
+        },
+    }
 }
 
 #[tauri::command]
-fn write_input(shared: State<'_, Shared>, data: String) -> Result<(), String> {
-    let mut slot = shared.slot();
-    let pane = slot.pane.as_mut().ok_or("no session is open")?;
-    pane.write(data.as_bytes()).map_err(|error| error.to_string())
+fn write_input(shared: State<'_, Shared>, pane: PaneId, data: String) -> Result<(), String> {
+    let mut workspace = shared.workspace();
+    let (_, attached) = workspace.attached.get_mut(&pane).ok_or("no session in this pane")?;
+    attached.write(data.as_bytes()).map_err(|error| error.to_string())
 }
 
 #[tauri::command]
-fn resize_pane(shared: State<'_, Shared>, columns: u16, rows: u16) -> Result<(), String> {
-    let slot = shared.slot();
-    let pane = slot.pane.as_ref().ok_or("no session is open")?;
-    pane.resize(columns, rows).map_err(|error| error.to_string())
+fn resize_pane(shared: State<'_, Shared>, pane: PaneId, columns: u16, rows: u16) -> Result<(), String> {
+    let workspace = shared.workspace();
+    let (_, attached) = workspace.attached.get(&pane).ok_or("no session in this pane")?;
+    attached.resize(columns, rows).map_err(|error| error.to_string())
 }
 
 fn publish(app: &AppHandle, update: refresher::Update) -> bool {
@@ -130,19 +222,25 @@ fn publish(app: &AppHandle, update: refresher::Update) -> bool {
 /// Leaves no `claude attach` behind when the window closes.
 fn detach_on_exit(app: &AppHandle, event: RunEvent) {
     if let RunEvent::Exit = event {
-        app.state::<Shared>().slot().pane = None;
+        app.state::<Shared>().workspace().attached.clear();
     }
 }
 
 fn main() -> ExitCode {
     let startup_errors = accounts::check_launcher_version().err().map(|error| error.to_string()).into_iter().collect();
-    let shared = Shared { view: Mutex::new(ListView::default()), startup_errors, slot: Mutex::default() };
+    let shared = Shared { view: Mutex::new(ListView::default()), startup_errors, workspace: Mutex::default() };
     let built = tauri::Builder::default()
         .manage(shared)
         .invoke_handler(tauri::generate_handler![
             current_list,
             filter_sessions,
             new_session,
+            layout,
+            split_pane,
+            close_pane,
+            focus_pane,
+            focus_step,
+            resize_split,
             open_session,
             write_input,
             resize_pane

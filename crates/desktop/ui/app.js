@@ -1,18 +1,8 @@
-const { invoke, Channel } = window.__TAURI__.core;
+import { Panes } from "./panes.js";
+
+const { invoke } = window.__TAURI__.core;
 const { listen } = window.__TAURI__.event;
 
-const terminal = new Terminal({
-  fontFamily: "monospace",
-  fontSize: 14,
-  theme: { background: "#111111" },
-});
-const fit = new FitAddon.FitAddon();
-
-// The session on the right: `output` tells its bytes apart from those of the session shown
-// before, `generation` tells its end apart.
-let current = null;
-// A session can end before `open_session` has returned its generation.
-let lastEnded = null;
 let lastView = { loaded: false, accounts: [], sessions: [], errors: [] };
 const picker = { rows: [], selected: 0, query: 0 };
 
@@ -47,7 +37,7 @@ function listItem(session) {
   const item = sessionItem(session);
   if (session.short_id) {
     item.classList.add("openable");
-    if (current && current.shortId === session.short_id) item.classList.add("open");
+    if (panes.shows(session)) item.classList.add("open");
     item.addEventListener("click", () => openSession(session));
   } else {
     item.title = elsewhere(session);
@@ -68,46 +58,13 @@ function render(view) {
   document.getElementById("errors").replaceChildren(...view.errors.map((error) => element("li", "error", error)));
 }
 
-function showEnd(session) {
-  session.ended = true;
-  terminal.write("\r\n\x1b[2m[session closed]\x1b[0m\r\n");
-}
-
-async function openSession(session) {
+function openSession(session) {
   if (!session.short_id) {
     setStatus(elsewhere(session));
-    return;
+    return Promise.resolve();
   }
   setStatus("");
-  if (current && current.shortId === session.short_id && !current.ended) {
-    terminal.focus();
-    return;
-  }
-  const output = new Channel();
-  const opening = { shortId: session.short_id, output, generation: null, ended: false };
-  current = opening;
-  output.onmessage = (bytes) => {
-    if (current === opening) terminal.write(new Uint8Array(bytes));
-  };
-  document.getElementById("placeholder").hidden = true;
-  terminal.reset();
-  render(lastView);
-  try {
-    opening.generation = await invoke("open_session", {
-      account: session.account,
-      shortId: session.short_id,
-      columns: terminal.cols,
-      rows: terminal.rows,
-      output,
-    });
-  } catch (error) {
-    if (current !== opening) return;
-    showEnd(opening);
-    terminal.write(`\x1b[31m${error}\x1b[0m\r\n`);
-    return;
-  }
-  if (current === opening && lastEnded === opening.generation) showEnd(opening);
-  terminal.focus();
+  return panes.open(session);
 }
 
 function showNumber(number) {
@@ -221,6 +178,11 @@ function shortcutFor(event) {
   if (ctrl && event.code === "KeyP") return { run: openPicker };
   const digit = /^Digit([1-9])$/.exec(event.code);
   if (alt && digit) return { run: () => showNumber(Number(digit[1])) };
+  if (ctrl && event.code === "KeyH") return { run: () => panes.step(-1) };
+  if (ctrl && event.code === "KeyL") return { run: () => panes.step(1) };
+  const ctrlShift = event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
+  if (ctrlShift && event.code === "KeyD") return { run: () => panes.split() };
+  if (ctrlShift && event.code === "KeyW") return { run: () => panes.close() };
   return null;
 }
 
@@ -232,49 +194,21 @@ function onKey(event) {
   shortcut.run();
 }
 
-function forwardInput(data) {
-  if (!current || current.ended) return;
-  invoke("write_input", { data }).catch((error) => console.error(error));
-}
-
-function forwardSize({ cols, rows }) {
-  if (!current || current.ended) return;
-  invoke("resize_pane", { columns: cols, rows }).catch((error) => console.error(error));
-}
-
-function loadWebgl() {
-  try {
-    const webgl = new WebglAddon.WebglAddon();
-    webgl.onContextLoss(() => webgl.dispose());
-    terminal.loadAddon(webgl);
-  } catch (error) {
-    console.warn("WebGL unavailable, using the DOM renderer:", error);
-  }
-}
-
-const container = document.getElementById("terminal");
-terminal.loadAddon(fit);
-terminal.open(container);
-loadWebgl();
-terminal.attachCustomKeyEventHandler((event) => shortcutFor(event) === null);
-terminal.onData(forwardInput);
-terminal.onResize(forwardSize);
-new ResizeObserver(() => fit.fit()).observe(container);
-fit.fit();
+const panes = new Panes(document.getElementById("panes"), {
+  keyFilter: (event) => shortcutFor(event) === null,
+  onChange: () => render(lastView),
+});
 
 document.addEventListener("keydown", onKey);
 document.getElementById("new-form").addEventListener("submit", startNewSession);
 document.getElementById("picker-query").addEventListener("input", filterPicker);
 document.getElementById("picker-query").addEventListener("keydown", onPickerKey);
 for (const dialog of document.querySelectorAll("dialog")) {
-  dialog.addEventListener("close", () => {
-    if (current && !current.ended) terminal.focus();
-  });
+  dialog.addEventListener("close", () => panes.focus());
 }
 
-await listen("pane-ended", (event) => {
-  lastEnded = event.payload;
-  if (current && current.generation === event.payload) showEnd(current);
-});
+await listen("pane-ended", (event) => panes.ended(event.payload));
+await listen("layout", (event) => panes.render(event.payload));
 await listen("sessions", (event) => render(event.payload));
+await panes.load();
 render(await invoke("current_list"));

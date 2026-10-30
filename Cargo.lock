@@ -464,6 +464,7 @@ dependencies = [
  "claude-sessions-core",
  "portable-pty",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
 ]
