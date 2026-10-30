@@ -163,7 +163,7 @@ function renderChips(view) {
   if (!view.loaded) {
     chips.replaceChildren(element("li", "chip-note", "loading…"));
   } else if (sessions.length === 0) {
-    chips.replaceChildren(element("li", "chip-note", "no sessions here · ctrl+n starts one"));
+    chips.replaceChildren(element("li", "chip-note", `no sessions here · ${CONTROL}+n starts one`));
   } else {
     const more = element("li", "chip more");
     more.addEventListener("click", openPicker);
@@ -520,7 +520,7 @@ function confirmHide() {
   form.dataset.account = session.account;
   form.dataset.shortId = session.short_id;
   document.getElementById("hide-question").textContent =
-    `Stop "${session.label}" and hide it from the bar? Its conversation is kept; ctrl+p brings it back.`;
+    `Stop "${session.label}" and hide it from the bar? Its conversation is kept; ${CONTROL}+p brings it back.`;
   document.getElementById("confirm-hide").showModal();
   form.querySelector("button[type=submit]").focus();
 }
@@ -539,7 +539,7 @@ async function hideSession(event) {
     setStatus(`${error}`);
     return;
   }
-  setStatus(`${session.label} hidden · ctrl+p brings it back`);
+  setStatus(`${session.label} hidden · ${CONTROL}+p brings it back`);
 }
 
 function onPickerKey(event) {
@@ -555,9 +555,14 @@ function onPickerKey(event) {
   }
 }
 
+// A Mac takes Cmd for the app and leaves Ctrl to the terminal.
+const MAC = /Mac/.test(navigator.platform || navigator.userAgent);
+// How the app's modifier is written in notices.
+const CONTROL = MAC ? "cmd" : "ctrl";
+
 // Keys the app keeps for itself, like `command_for` in the terminal interface; F1 lists
-// them from here, so the help cannot drift. Keys are named as in the trace, "#" being a
-// digit from 1 to 9, which `run` gets.
+// them from here, so the help cannot drift. "ctrl" is Cmd on a Mac, "#" a digit from 1 to 9,
+// which `run` gets; `mac` replaces keys a Mac keeps for itself (Cmd+H hides the app).
 const SHORTCUTS = [
   { group: "sessions", keys: "ctrl+n", help: "start a new session", run: openNewSessionForm },
   { group: "sessions", keys: "ctrl+p", help: "find a session of this tab", run: openPicker },
@@ -565,12 +570,12 @@ const SHORTCUTS = [
   { group: "sessions", keys: "alt+h", help: "open the previous chip", run: () => stepSession(-1) },
   { group: "sessions", keys: "alt+l", help: "open the next chip", run: () => stepSession(1) },
   { group: "sessions", keys: "f2", help: "give a short name", run: openRenameForm },
-  { group: "sessions", keys: "ctrl+shift+k", help: "stop and hide (ctrl+p brings it back)", run: confirmHide },
+  { group: "sessions", keys: "ctrl+shift+k", help: `stop and hide (${CONTROL}+p brings it back)`, run: confirmHide },
   { group: "sessions", keys: "ctrl+shift+m", help: "read its messages", run: openActiveMessages },
   { group: "panes", keys: "ctrl+shift+d", help: "split the pane", run: () => panes.split() },
   { group: "panes", keys: "ctrl+shift+w", help: "close the pane (the session keeps running)", run: () => panes.close() },
-  { group: "panes", keys: "ctrl+h", help: "previous pane", run: () => panes.step(-1) },
-  { group: "panes", keys: "ctrl+l", help: "next pane", run: () => panes.step(1) },
+  { group: "panes", keys: "ctrl+h", mac: "ctrl+bracketleft", help: "previous pane", run: () => panes.step(-1) },
+  { group: "panes", keys: "ctrl+l", mac: "ctrl+bracketright", help: "next pane", run: () => panes.step(1) },
   { group: "tabs", keys: "ctrl+shift+t", help: "add a project", run: openProjectForm },
   { group: "tabs", keys: "ctrl+shift+x", help: "remove this project (its sessions keep running)", run: closeTab },
   { group: "tabs", keys: "ctrl+shift+h", help: "previous tab", run: () => panes.tabStep(-1) },
@@ -579,23 +584,39 @@ const SHORTCUTS = [
   { group: "app", keys: "ctrl+shift+e", help: "next theme", run: cycleTheme },
   { group: "app", keys: "f1", help: "these shortcuts", run: openHelp },
 ];
-const SHORTCUT_KEYS = new Map(SHORTCUTS.map((shortcut) => [shortcut.keys, shortcut]));
+// The keys of `shortcut` on this system.
+function keysOf(shortcut) {
+  return MAC ? (shortcut.mac ?? shortcut.keys) : shortcut.keys;
+}
+
+const SHORTCUT_KEYS = new Map(SHORTCUTS.map((shortcut) => [keysOf(shortcut), shortcut]));
+
+// How `event` is named in SHORTCUTS, Cmd playing Ctrl on a Mac; null when it holds the
+// modifier left to the terminal (Ctrl on a Mac, Super elsewhere).
+function shortcutName(event) {
+  if (MAC ? event.ctrlKey : event.metaKey) return null;
+  const control = MAC ? event.metaKey : event.ctrlKey;
+  const modifiers = [control && "ctrl", event.shiftKey && "shift", event.altKey && "alt"].filter(Boolean);
+  return [...modifiers, event.code.replace(/^(Key|Digit)/, "").toLowerCase()].join("+");
+}
 
 // The shortcut of `event`, its digit given to `run`; null for keys the terminal gets.
 export function shortcutFor(event) {
-  if (event.metaKey) return null;
-  const name = keyName(event);
+  const name = shortcutName(event);
+  if (name === null) return null;
   const digit = /\+([1-9])$/.exec(name);
   const shortcut = SHORTCUT_KEYS.get(digit ? name.replace(/[1-9]$/, "#") : name);
   if (!shortcut) return null;
   return { ...shortcut, run: () => shortcut.run(digit ? Number(digit[1]) : undefined) };
 }
 
-// "ctrl+shift+#" → "Ctrl+Shift+1..9".
+const SHOWN = { "#": "1..9", ctrl: MAC ? "Cmd" : "Ctrl", bracketleft: "[", bracketright: "]" };
+
+// "ctrl+shift+#" → "Ctrl+Shift+1..9", "Cmd+Shift+1..9" on a Mac.
 function shownKeys(keys) {
   return keys
     .split("+")
-    .map((part) => (part === "#" ? "1..9" : part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1)))
+    .map((part) => SHOWN[part] ?? (part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1)))
     .join("+");
 }
 
@@ -604,7 +625,7 @@ function openHelp() {
     const section = element("section", "help-group");
     section.append(element("h2", "", group));
     for (const shortcut of SHORTCUTS.filter((entry) => entry.group === group)) {
-      section.append(element("kbd", "", shownKeys(shortcut.keys)), element("span", "", shortcut.help));
+      section.append(element("kbd", "", shownKeys(keysOf(shortcut))), element("span", "", shortcut.help));
     }
     return section;
   });
@@ -614,7 +635,7 @@ function openHelp() {
 
 // "ctrl+shift+t", "alt+3", "f2": how a shortcut is named in the trace.
 function keyName(event) {
-  const modifiers = [event.ctrlKey && "ctrl", event.shiftKey && "shift", event.altKey && "alt"].filter(Boolean);
+  const modifiers = [event.ctrlKey && "ctrl", event.metaKey && "meta", event.shiftKey && "shift", event.altKey && "alt"].filter(Boolean);
   const key = event.code.replace(/^(Key|Digit)/, "").toLowerCase();
   return [...modifiers, key].join("+");
 }
