@@ -71,7 +71,7 @@ fn current_list(shared: State<'_, Shared>) -> ListView {
     shared.view.lock().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 fn filter_sessions(shared: State<'_, Shared>, tab: PaneId, query: String) -> Vec<SessionRow> {
     let _span = shared.trace.span("filter_sessions");
     view::filter(&shared.view.lock().unwrap_or_else(PoisonError::into_inner), tab, &query)
@@ -101,7 +101,7 @@ async fn new_session(shared: State<'_, Shared>, account: String, directory: Stri
 }
 
 /// The folders a directory field offers before anything is typed.
-#[tauri::command]
+#[tauri::command(async)]
 fn known_directories(shared: State<'_, Shared>) -> Vec<String> {
     let _span = shared.trace.span("known_directories");
     let Some(home) = std::env::home_dir() else {
@@ -112,7 +112,7 @@ fn known_directories(shared: State<'_, Shared>) -> Vec<String> {
 }
 
 /// The folders that can follow what is typed in a directory field.
-#[tauri::command]
+#[tauri::command(async)]
 fn complete_directory(shared: State<'_, Shared>, text: String) -> Vec<String> {
     let _span = shared.trace.span("complete_directory");
     std::env::home_dir().map(|home| launcher::complete_directory(&text, &home)).unwrap_or_default()
@@ -136,6 +136,13 @@ struct Opened {
 fn tabs(shared: State<'_, Shared>) -> Tabs {
     let _span = shared.trace.span("tabs");
     shared.workspace().tabs.clone()
+}
+
+/// Takes the session out of `pane`, without waiting for its attaching process to end.
+fn detach(workspace: &mut Workspace, pane: PaneId) {
+    if let Some((_, attached)) = workspace.attached.remove(&pane) {
+        pane::detach(attached);
+    }
 }
 
 /// Ends every command that may move the focus: the session now looked at loses its
@@ -169,7 +176,7 @@ fn close_pane(app: AppHandle, shared: State<'_, Shared>) -> Tabs {
     let mut workspace = shared.workspace();
     if let Some(closed) = workspace.tabs.current_mut().close() {
         // Detaching only: the background session keeps running in Claude Code.
-        workspace.attached.remove(&closed);
+        detach(&mut workspace, closed);
     }
     respond(&app, &shared, workspace)
 }
@@ -263,7 +270,7 @@ async fn hide_session(app: AppHandle, shared: State<'_, Shared>, account: String
     let mut workspace = shared.workspace();
     // Detaching: the session is stopped already.
     for pane in workspace.tabs.clear_session(&SessionKey { account, short_id }) {
-        workspace.attached.remove(&pane);
+        detach(&mut workspace, pane);
     }
     Ok(respond(&app, &shared, workspace))
 }
@@ -304,7 +311,7 @@ fn close_tab(app: AppHandle, shared: State<'_, Shared>) -> Result<Tabs, String> 
     save_projects(&shared, &next)?;
     workspace.tabs = next;
     for pane in panes {
-        workspace.attached.remove(&pane);
+        detach(&mut workspace, pane);
     }
     let tabs = respond(&app, &shared, workspace);
     reassign(&app, &shared, &tabs);
@@ -367,7 +374,7 @@ fn open_session(
     }
     {
         let _span = shared.trace.span("detach previous");
-        workspace.attached.remove(&pane);
+        detach(&mut workspace, pane);
     }
     workspace.generation += 1;
     let generation = workspace.generation;

@@ -99,6 +99,12 @@ impl Drop for Pane {
     }
 }
 
+/// Detaches in the background: the attaching process may take a while to end, and the
+/// window must not wait for it.
+pub fn detach(pane: Pane) -> JoinHandle<()> {
+    thread::spawn(move || drop(pane))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::mpsc::{self, Receiver};
@@ -195,6 +201,18 @@ mod tests {
         let started = Instant::now();
         drop(pane);
         assert!(started.elapsed() < TIMEOUT, "closing waited for the program to end by itself");
+        assert!(exited(&seen));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn detaching_returns_before_a_slow_program_has_ended() {
+        let (pane, seen) = open(&shell("trap '' HUP; printf ready; sleep 2"), 80, 24);
+        assert!(wait_for(&seen, "ready").contains("ready"));
+        let started = Instant::now();
+        let detached = detach(pane);
+        assert!(started.elapsed() < Duration::from_millis(200), "detaching waited {:?}", started.elapsed());
+        detached.join().expect("the pane is dropped");
         assert!(exited(&seen));
     }
 
