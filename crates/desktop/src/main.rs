@@ -81,6 +81,22 @@ async fn new_session(account: String, directory: String, name: String) -> Result
         .map_err(|error| error.to_string())?
 }
 
+/// The folders a directory field offers before anything is typed.
+#[tauri::command]
+fn known_directories(shared: State<'_, Shared>) -> Vec<String> {
+    let Some(home) = std::env::home_dir() else {
+        return Vec::new();
+    };
+    let projects = shared.workspace().tabs.projects();
+    view::known_directories(&projects, &shared.view.lock().unwrap_or_else(PoisonError::into_inner), &home)
+}
+
+/// The folders that can follow what is typed in a directory field.
+#[tauri::command]
+fn complete_directory(text: String) -> Vec<String> {
+    std::env::home_dir().map(|home| launcher::complete_directory(&text, &home)).unwrap_or_default()
+}
+
 #[derive(Clone, Serialize)]
 struct Ended {
     pane: PaneId,
@@ -345,6 +361,8 @@ fn main() -> ExitCode {
             current_list,
             filter_sessions,
             new_session,
+            known_directories,
+            complete_directory,
             tabs,
             split_pane,
             close_pane,

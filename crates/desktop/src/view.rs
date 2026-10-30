@@ -3,12 +3,17 @@
 use std::path::Path;
 
 use claude_sessions_core::accounts::{SessionInfo, SessionState};
+use claude_sessions_core::launcher::tilde;
 use claude_sessions_core::refresher::Update;
 use claude_sessions_core::search::matches;
 use serde::Serialize;
 
 use crate::layout::{PaneId, SessionKey};
+use crate::projects::Project;
 use crate::tabs::Tabs;
+
+/// A directory field offers at most this many known folders.
+const KNOWN: usize = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SessionRow {
@@ -146,6 +151,23 @@ pub fn seen(view: &mut ListView, key: &SessionKey) -> bool {
     changed
 }
 
+/// The folders a directory field offers before anything is typed: the projects', then those
+/// of the sessions in bar order, each once.
+pub fn known_directories(projects: &[Project], view: &ListView, home: &Path) -> Vec<String> {
+    let folders = projects.iter().map(|project| project.directory.as_path());
+    let sessions = view.sessions.iter().filter(|row| !row.directory.is_empty()).map(|row| Path::new(&row.directory));
+    let mut known: Vec<String> = Vec::new();
+    for folder in folders.chain(sessions).map(|folder| tilde(folder, home)) {
+        if known.len() == KNOWN {
+            break;
+        }
+        if !known.contains(&folder) {
+            known.push(folder);
+        }
+    }
+    known
+}
+
 /// The rows Ctrl+P offers for `query`, in bar order.
 pub fn filter(view: &ListView, query: &str) -> Vec<SessionRow> {
     view.sessions.iter().filter(|row| matches(&row.info, query)).cloned().collect()
@@ -158,7 +180,6 @@ mod tests {
     use claude_sessions_core::accounts::{SessionState, Snapshot};
 
     use super::*;
-    use crate::projects::Project;
 
     fn session(account: &str, name: &str, isolated: bool) -> SessionInfo {
         SessionInfo {
@@ -377,6 +398,30 @@ mod tests {
         let tab_of = |title: &str| view.sessions.iter().find(|row| row.title == title).map(|row| row.tab);
         assert_eq!(tab_of("in"), Some(api));
         assert_eq!(tab_of("out"), Some(all));
+    }
+
+    #[test]
+    fn known_folders_are_the_projects_then_the_sessions_each_once() {
+        let home = Path::new("/home/u");
+        let projects = [Project::new("/home/u/Dev/api".into()), Project::new("/home/u/Dev/blog".into())];
+        let sessions = vec![
+            SessionInfo { cwd: "/home/u/Dev/blog".into(), ..session("louis", "a", false) },
+            SessionInfo { cwd: "/tmp/x".into(), ..session("louis", "b", false) },
+            SessionInfo { cwd: String::new(), ..session("louis", "c", false) },
+        ];
+        let view = refresh(&ListView::default(), sessions, None);
+        let known = known_directories(&projects, &view, home);
+        let expected: Vec<String> =
+            [Path::new("/home/u/Dev/api"), Path::new("/home/u/Dev/blog"), Path::new("/tmp/x")].iter().map(|folder| tilde(folder, home)).collect();
+        assert_eq!(known, expected);
+    }
+
+    #[test]
+    fn known_folders_stop_at_ten() {
+        let projects: Vec<Project> = (0..12).map(|i| Project::new(format!("/home/u/p{i}").into())).collect();
+        let known = known_directories(&projects, &ListView::default(), Path::new("/home/u"));
+        assert_eq!(known.len(), 10);
+        assert_eq!(known[9], tilde(Path::new("/home/u/p9"), Path::new("/home/u")));
     }
 
     #[test]

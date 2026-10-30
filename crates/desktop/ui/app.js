@@ -1,3 +1,4 @@
+import { DirectoryField } from "./directories.js";
 import { Panes } from "./panes.js";
 
 const { invoke } = window.__TAURI__.core;
@@ -42,6 +43,11 @@ function chipState(session) {
   if (session.finished) return "finished";
   if (!session.short_id) return "elsewhere";
   return session.state;
+}
+
+function directoryField(formId) {
+  const form = document.getElementById(formId);
+  return new DirectoryField(form.elements.directory, form.querySelector(".suggestions"));
 }
 
 // The sessions of the bar: those of the visible project, or every one in "all". Rust sorts
@@ -120,8 +126,17 @@ function fitChips() {
   const items = [...chips.children].filter((item) => item !== more);
   for (const item of items) item.hidden = false;
   more.hidden = true;
+  // Not laid out yet: nothing to measure, every chip stays.
+  if (chips.clientWidth === 0) return;
+  // The right edge of the last chip shown against the bar's, rather than scrollWidth, which
+  // engines round differently.
+  const edge = chips.getBoundingClientRect().right;
+  const overflows = () => {
+    const shown = [...chips.children].filter((item) => !item.hidden);
+    return shown.length > 0 && shown[shown.length - 1].getBoundingClientRect().right > edge + 0.5;
+  };
   let hidden = 0;
-  while (chips.scrollWidth > chips.clientWidth && hidden < items.length) {
+  while (overflows() && hidden < items.length) {
     hidden += 1;
     items[items.length - hidden].hidden = true;
     more.hidden = false;
@@ -191,6 +206,7 @@ function openNewSessionForm() {
   fields.account.replaceChildren(...lastView.accounts.map((account) => element("option", "", account)));
   const project = panes.activeTab().project;
   fields.directory.value = project ? project.directory : "~";
+  sessionDirectory.reset();
   fields.name.value = "";
   document.getElementById("new-message").textContent = "";
   form.querySelector("button").disabled = false;
@@ -230,6 +246,7 @@ async function startNewSession(event) {
 function openProjectForm() {
   const form = document.getElementById("project-form");
   form.elements.directory.value = "~";
+  projectDirectory.reset();
   document.getElementById("project-message").textContent = "";
   document.getElementById("new-project").showModal();
   form.elements.directory.focus();
@@ -344,6 +361,9 @@ const panes = new Panes(document.getElementById("panes"), document.getElementByI
   isFinished,
   markOf,
 });
+
+const sessionDirectory = directoryField("new-form");
+const projectDirectory = directoryField("project-form");
 
 document.addEventListener("keydown", onKey);
 new ResizeObserver(fitChips).observe(document.getElementById("chips"));

@@ -1,7 +1,8 @@
 //! Starts a background Claude Code session for an account, in a directory.
 
 use std::ffi::OsString;
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::{Path, PathBuf, is_separator};
 use std::process::Stdio;
 
 use claude_accounts::{Paths, launch, mcp};
@@ -27,6 +28,43 @@ pub fn resolve_directory(text: &str, home: &Path) -> Result<PathBuf, String> {
         return Err(format!("no such directory: {}", directory.display()));
     }
     Ok(directory)
+}
+
+/// `path` as a person reads it: `~` for the home directory, which `expand_home` reads back.
+pub fn tilde(path: &Path, home: &Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+        Ok(rest) => format!("~/{}", rest.display()),
+        Err(_) => path.display().to_string(),
+    }
+}
+
+/// Completions never list more than this.
+const COMPLETIONS: usize = 20;
+
+/// The folders that can follow `text` in a directory field: `~/Dev/Pr` lists the folders of
+/// `~/Dev` whose name starts with `Pr`, case ignored, hidden ones only after a `.`. Each comes
+/// back as typed plus its name and a separator, so choosing it lists the next level.
+pub fn complete_directory(text: &str, home: &Path) -> Vec<String> {
+    let text = text.trim_start();
+    let (parent, start) = match text.rfind(is_separator) {
+        Some(index) => (&text[..=index], &text[index + 1..]),
+        None if text == "~" => ("~/", ""),
+        None => return Vec::new(),
+    };
+    let Ok(entries) = fs::read_dir(expand_home(parent, home)) else {
+        return Vec::new();
+    };
+    let start = start.to_lowercase();
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path().is_dir())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| (start.starts_with('.') || !name.starts_with('.')) && name.to_lowercase().starts_with(&start))
+        .collect();
+    names.sort_by_key(|name| name.to_lowercase());
+    names.truncate(COMPLETIONS);
+    names.into_iter().map(|name| format!("{parent}{name}{}", std::path::MAIN_SEPARATOR)).collect()
 }
 
 /// Reads the short id from `backgrounded · 378ce649 · name (…)`.
@@ -95,6 +133,71 @@ mod tests {
         assert_eq!(expand_home("~", home), PathBuf::from("/home/u"));
         assert_eq!(expand_home("~other/x", home), PathBuf::from("~other/x"));
         assert_eq!(expand_home("/tmp", home), PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn tilde_shortens_the_home_directory_only() {
+        let home = Path::new("/home/u");
+        assert_eq!(tilde(Path::new("/home/u"), home), "~");
+        assert_eq!(tilde(Path::new("/home/u/Dev/api"), home), format!("~/{}", Path::new("Dev/api").display()));
+        assert_eq!(tilde(Path::new("/home/user2"), home), Path::new("/home/user2").display().to_string());
+    }
+
+    /// `a/`, `Alpha/`, `b/`, `.cache/` and a file `a.txt`, in a fresh folder.
+    fn tree(label: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("claude-sessions-complete-{label}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        for folder in ["a", "Alpha", "b", ".cache"] {
+            fs::create_dir_all(root.join(folder)).unwrap();
+        }
+        fs::write(root.join("a.txt"), b"").unwrap();
+        root
+    }
+
+    fn completed(text: &str, home: &Path) -> Vec<String> {
+        let separator = std::path::MAIN_SEPARATOR;
+        complete_directory(text, home).into_iter().map(|path| path.rsplit(separator).nth(1).unwrap_or_default().to_string()).collect()
+    }
+
+    #[test]
+    fn a_folder_lists_its_visible_folders_in_order() {
+        let root = tree("list");
+        let typed = format!("{}{}", root.display(), std::path::MAIN_SEPARATOR);
+        assert_eq!(completed(&typed, &root), ["a", "Alpha", "b"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn the_start_of_a_name_is_matched_case_ignored_and_files_are_left_out() {
+        let root = tree("start");
+        let typed = format!("{}{}A", root.display(), std::path::MAIN_SEPARATOR);
+        assert_eq!(completed(&typed, &root), ["a", "Alpha"]);
+        assert!(complete_directory(&typed, &root).iter().all(|path| path.starts_with(&typed[..typed.len() - 1])));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn hidden_folders_need_a_dot() {
+        let root = tree("hidden");
+        let typed = format!("{}{}.c", root.display(), std::path::MAIN_SEPARATOR);
+        assert_eq!(completed(&typed, &root), [".cache"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn home_is_completed_as_typed() {
+        let root = tree("home");
+        assert_eq!(complete_directory("~/al", &root), [format!("~/Alpha{}", std::path::MAIN_SEPARATOR)]);
+        assert_eq!(completed("~", &root), ["a", "Alpha", "b"]);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn nothing_to_list_gives_nothing() {
+        let root = tree("nothing");
+        assert!(complete_directory("~/no-such-folder/x", &root).is_empty());
+        assert!(complete_directory("Dev", &root).is_empty());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

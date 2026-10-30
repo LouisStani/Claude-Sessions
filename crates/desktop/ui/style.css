@@ -575,6 +575,39 @@ input:focus, select:focus {
   display: none;
 }
 
+.suggestions {
+  max-height: 220px;
+  margin-top: -4px;
+  overflow-y: auto;
+  font-size: 12px;
+  background: var(--background);
+  border: var(--stroke) solid var(--line);
+  border-radius: var(--radius);
+}
+
+.suggestions[hidden] {
+  display: none;
+}
+
+.suggestion {
+  padding: 4px 8px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.suggestion:hover {
+  background: var(--surface);
+}
+
+.suggestion.selected {
+  color: var(--text);
+  background: var(--surface);
+  box-shadow: inset 2px 0 0 var(--active);
+}
+
 #picker-query {
   width: 100%;
 }
