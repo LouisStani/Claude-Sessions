@@ -132,6 +132,18 @@ impl Tabs {
         self.current_mut().show(pane, session)
     }
 
+    /// Every pane showing `session`, in any tab, shows nothing now: returns them.
+    pub fn clear_session(&mut self, session: &SessionKey) -> Vec<PaneId> {
+        let mut cleared = Vec::new();
+        for tab in &mut self.tabs {
+            if let Some(pane) = tab.layout.shown_in(session) {
+                tab.layout.clear(pane);
+                cleared.push(pane);
+            }
+        }
+        cleared
+    }
+
     /// The pane, in whichever tab, no longer shows a session.
     pub fn clear(&mut self, pane: PaneId) {
         for tab in &mut self.tabs {
@@ -298,6 +310,18 @@ mod tests {
         tabs.show(pane, key("aaa"));
         add(&mut tabs);
         tabs.clear(pane);
+        let other = active_tab(&tabs).layout.active();
+        assert_eq!(tabs.show(other, key("aaa")), Some(Shown::Attach));
+    }
+
+    #[test]
+    fn clearing_a_session_empties_its_pane_in_any_tab() {
+        let mut tabs = Tabs::default();
+        let pane = active_tab(&tabs).layout.active();
+        tabs.show(pane, key("aaa"));
+        add(&mut tabs);
+        assert_eq!(tabs.clear_session(&key("aaa")), [pane]);
+        assert!(tabs.clear_session(&key("aaa")).is_empty());
         let other = active_tab(&tabs).layout.active();
         assert_eq!(tabs.show(other, key("aaa")), Some(Shown::Attach));
     }

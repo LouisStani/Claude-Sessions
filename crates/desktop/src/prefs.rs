@@ -1,5 +1,5 @@
 //! What the app keeps about a session, by session id, in `sessions.json` (see `store`): the
-//! short name given with F2.
+//! short name given with F2, and whether Ctrl+Shift+K hid it.
 
 use std::collections::BTreeMap;
 
@@ -12,11 +12,22 @@ const SHORT: usize = 24;
 pub struct SessionPrefs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 impl SessionPrefs {
     fn is_empty(&self) -> bool {
-        self.label.is_none()
+        self.label.is_none() && !self.hidden
+    }
+}
+
+/// Hides `session_id` from the bar, or shows it again.
+pub fn set_hidden(prefs: &mut Prefs, session_id: &str, hidden: bool) {
+    let entry = prefs.entry(session_id.to_string()).or_default();
+    entry.hidden = hidden;
+    if entry.is_empty() {
+        prefs.remove(session_id);
     }
 }
 
@@ -87,6 +98,26 @@ mod tests {
         let name = "éééééééééééééééééééééééé";
         assert_eq!(name.chars().count(), SHORT);
         assert_eq!(short_title(None, name), name);
+    }
+
+    #[test]
+    fn hiding_keeps_the_name_and_showing_again_forgets_nothing_else() {
+        let mut prefs = Prefs::new();
+        set_label(&mut prefs, "id-1", "router");
+        set_hidden(&mut prefs, "id-1", true);
+        assert_eq!(prefs["id-1"], SessionPrefs { label: Some("router".into()), hidden: true });
+        set_hidden(&mut prefs, "id-1", false);
+        assert_eq!(prefs["id-1"], SessionPrefs { label: Some("router".into()), hidden: false });
+        set_hidden(&mut prefs, "id-2", true);
+        set_hidden(&mut prefs, "id-2", false);
+        assert!(!prefs.contains_key("id-2"));
+    }
+
+    #[test]
+    fn only_what_is_set_is_written() {
+        let mut prefs = Prefs::new();
+        set_hidden(&mut prefs, "id-1", true);
+        assert_eq!(serde_json::to_string(&prefs).unwrap(), r#"{"id-1":{"hidden":true}}"#);
     }
 
     #[test]

@@ -524,7 +524,7 @@ dialog::backdrop {
   background: rgb(0 0 0 / 55%);
 }
 
-#new-form, #project-form, #rename-form {
+#new-form, #project-form, #rename-form, #hide-form {
   display: grid;
   gap: 10px;
 }
@@ -550,7 +550,7 @@ input:focus, select:focus {
   border-color: var(--active);
 }
 
-#new-form button, #project-form button, #rename-form button {
+#new-form button, #project-form button, #rename-form button, #hide-form button[type="submit"] {
   justify-self: end;
   font-weight: 700;
   color: var(--on-active);
@@ -607,6 +607,21 @@ input:focus, select:focus {
   color: var(--text);
   background: var(--surface);
   box-shadow: inset 2px 0 0 var(--active);
+}
+
+#hide-question {
+  margin: 0;
+  color: var(--muted);
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+#hide-cancel {
+  cursor: pointer;
 }
 
 #picker-query {

@@ -55,12 +55,13 @@ function directoryField(formId) {
 function barSessions() {
   if (panes.state === null) return [];
   const tab = panes.activeTab();
-  return tab.project ? lastView.sessions.filter((session) => session.tab === tab.id) : lastView.sessions;
+  const shown = lastView.sessions.filter((session) => !session.hidden);
+  return tab.project ? shown.filter((session) => session.tab === tab.id) : shown;
 }
 
 // The dot of a project tab: its most urgent session, if that one needs you.
 function markOf(tabId) {
-  const session = lastView.sessions.find((row) => row.tab === tabId);
+  const session = lastView.sessions.find((row) => row.tab === tabId && !row.hidden);
   if (!session) return null;
   if (session.unread > 0) return "waiting";
   const state = chipState(session);
@@ -77,6 +78,7 @@ function sessionItem(session) {
   if (session.isolated) detail.push("isolated");
   const project = panes.projectName(session.tab);
   if (project) detail.push(project);
+  if (session.hidden) detail.push("hidden");
   item.append(title, element("div", "detail", detail.join(" · ")));
   return item;
 }
@@ -338,9 +340,52 @@ function openPicker() {
   filterPicker();
 }
 
-function choose(session) {
+// A hidden session chosen here comes back to the bar first.
+async function choose(session) {
   document.getElementById("picker").close();
+  if (session.hidden) {
+    try {
+      await invoke("show_session", { account: session.account, shortId: session.short_id });
+    } catch (error) {
+      setStatus(`${error}`);
+      return;
+    }
+  }
   openSession(session);
+}
+
+// Asks before stopping and hiding the session of the active pane.
+function confirmHide() {
+  const key = panes.activeSession();
+  const session = key && rowOf(key);
+  if (!session) {
+    setStatus("no session in this pane to hide");
+    return;
+  }
+  const form = document.getElementById("hide-form");
+  form.dataset.account = session.account;
+  form.dataset.shortId = session.short_id;
+  document.getElementById("hide-question").textContent =
+    `Stop "${session.label}" and hide it from the bar? Its conversation is kept; ctrl+p brings it back.`;
+  document.getElementById("confirm-hide").showModal();
+  form.querySelector("button[type=submit]").focus();
+}
+
+// Stops the session and hides it; Ctrl+P brings it back.
+async function hideSession(event) {
+  event.preventDefault();
+  document.getElementById("confirm-hide").close();
+  const form = event.target;
+  const session = rowOf({ account: form.dataset.account, short_id: form.dataset.shortId });
+  if (!session) return;
+  setStatus(`stopping ${session.label}…`);
+  try {
+    panes.render(await invoke("hide_session", { account: session.account, shortId: session.short_id }));
+  } catch (error) {
+    setStatus(`${error}`);
+    return;
+  }
+  setStatus(`${session.label} hidden · ctrl+p brings it back`);
 }
 
 function onPickerKey(event) {
@@ -374,6 +419,7 @@ function shortcutFor(event) {
   if (ctrlShift && event.code === "KeyW") return { run: () => panes.close() };
   if (ctrlShift && event.code === "KeyT") return { run: openProjectForm };
   if (ctrlShift && event.code === "KeyX") return { run: closeTab };
+  if (ctrlShift && event.code === "KeyK") return { run: confirmHide };
   if (ctrlShift && event.code === "KeyH") return { run: () => panes.tabStep(-1) };
   if (ctrlShift && event.code === "KeyL") return { run: () => panes.tabStep(1) };
   if (ctrlShift && digit) return { run: () => panes.goTab(Number(digit[1])) };
@@ -404,6 +450,8 @@ new ResizeObserver(fitChips).observe(document.getElementById("chips"));
 document.getElementById("new-form").addEventListener("submit", startNewSession);
 document.getElementById("project-form").addEventListener("submit", addProject);
 document.getElementById("rename-form").addEventListener("submit", renameSession);
+document.getElementById("hide-form").addEventListener("submit", hideSession);
+document.getElementById("hide-cancel").addEventListener("click", () => document.getElementById("confirm-hide").close());
 document.getElementById("picker-query").addEventListener("input", filterPicker);
 document.getElementById("picker-query").addEventListener("keydown", onPickerKey);
 for (const dialog of document.querySelectorAll("dialog")) {

@@ -1,4 +1,7 @@
-//! The command that shows a background session in a terminal, the same for every interface.
+//! The commands that show a background session in a terminal or stop it, the same for every
+//! interface.
+
+use std::process::Command;
 
 use crate::accounts::LAUNCHER;
 
@@ -19,6 +22,14 @@ pub fn attach_command(account: &str, short_id: &str) -> AttachCommand {
     }
 }
 
+/// `claude-accounts run <account> stop <short_id>`: the session stops and keeps its
+/// conversation; `attach` starts it again.
+pub fn stop_command(account: &str, short_id: &str) -> Command {
+    let mut command = Command::new(LAUNCHER);
+    command.args(["run", account, "stop", short_id]);
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -30,5 +41,12 @@ mod tests {
         assert_eq!(command.args, ["run", "lystriq", "attach", "378ce649"]);
         assert!(command.env.contains(&("TERM".into(), "xterm-256color".into())));
         assert!(command.env.contains(&("COLORTERM".into(), "truecolor".into())));
+    }
+
+    #[test]
+    fn stops_through_claude_accounts() {
+        let command = stop_command("lystriq", "378ce649");
+        assert_eq!(command.get_program(), "claude-accounts");
+        assert_eq!(command.get_args().collect::<Vec<_>>(), ["run", "lystriq", "stop", "378ce649"]);
     }
 }

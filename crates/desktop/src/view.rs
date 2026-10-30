@@ -24,6 +24,8 @@ pub struct SessionRow {
     pub label: String,
     /// The short name given with F2, if any, which the F2 form starts from.
     pub given: Option<String>,
+    /// Hidden with Ctrl+Shift+K: out of the bar, last in Ctrl+P. Set by `assign`.
+    pub hidden: bool,
     pub account: String,
     pub directory: String,
     /// Only background sessions have one, and only they can be opened here.
@@ -75,6 +77,7 @@ fn row(position: usize, session: &SessionInfo, unread: usize, finished: bool) ->
         title: session.title(),
         label: short_title(None, &session.title()),
         given: None,
+        hidden: false,
         account: session.account.clone(),
         directory: session.cwd.clone(),
         short_id: session.short_id.clone(),
@@ -89,8 +92,12 @@ fn row(position: usize, session: &SessionInfo, unread: usize, finished: bool) ->
 }
 
 /// Where a session goes in the bar: what needs you first, then what runs, then what sleeps.
-/// Sessions running in another terminal cannot be opened here: always last.
+/// Sessions running in another terminal cannot be opened here: after those. Hidden ones come
+/// last of all, for Ctrl+P.
 fn rank(row: &SessionRow) -> u8 {
+    if row.hidden {
+        return 6;
+    }
     if row.short_id.is_none() {
         return 5;
     }
@@ -118,9 +125,12 @@ fn order(sessions: &mut [SessionRow]) {
 pub fn assign(view: &mut ListView, tabs: &Tabs, prefs: &Prefs) {
     for row in &mut view.sessions {
         row.tab = tabs.owner_tab(Path::new(&row.directory));
-        row.given = prefs.get(&row.info.session_id).and_then(|kept| kept.label.clone());
+        let kept = prefs.get(&row.info.session_id);
+        row.given = kept.and_then(|kept| kept.label.clone());
+        row.hidden = kept.is_some_and(|kept| kept.hidden);
         row.label = short_title(row.given.as_deref(), &row.title);
     }
+    order(&mut view.sessions);
 }
 
 /// A failed refresh keeps the previous list on screen and says why it is stale.
@@ -166,7 +176,7 @@ pub fn seen(view: &mut ListView, key: &SessionKey) -> bool {
 /// of the sessions in bar order, each once.
 pub fn known_directories(projects: &[Project], view: &ListView, home: &Path) -> Vec<String> {
     let folders = projects.iter().map(|project| project.directory.as_path());
-    let sessions = view.sessions.iter().filter(|row| !row.directory.is_empty()).map(|row| Path::new(&row.directory));
+    let sessions = view.sessions.iter().filter(|row| !row.hidden && !row.directory.is_empty()).map(|row| Path::new(&row.directory));
     let mut known: Vec<String> = Vec::new();
     for folder in folders.chain(sessions).map(|folder| tilde(folder, home)) {
         if known.len() == KNOWN {
@@ -425,6 +435,24 @@ mod tests {
         assert_eq!(given_of("Router CEO et flux de données Overview"), None);
         assert_eq!(label_of("Router CEO et flux de données Overview").as_deref(), Some("Router CEO et flux de…"));
         assert_eq!(titles(&filter(&view, "backend")), ["api"]);
+    }
+
+    #[test]
+    fn hidden_sessions_go_last_and_stay_findable() {
+        let sessions = vec![
+            SessionInfo { cwd: "/home/u/old-work".into(), ..in_state("louis", "old", SessionState::Waiting) },
+            in_state("louis", "asleep", SessionState::Paused),
+            elsewhere("louis", "other"),
+        ];
+        let mut view = refresh(&ListView::default(), sessions, None);
+        let mut prefs = Prefs::new();
+        crate::prefs::set_hidden(&mut prefs, "louis-old", true);
+        assign(&mut view, &Tabs::default(), &prefs);
+        assert_eq!(titles(&view.sessions), ["asleep", "other", "old"]);
+        assert!(view.sessions[2].hidden);
+        assert_eq!(titles(&filter(&view, "old")), ["old"]);
+        let home = Path::new("/home/u");
+        assert!(!known_directories(&[], &view, home).contains(&tilde(Path::new("/home/u/old-work"), home)));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use claude_sessions_core::attach::attach_command;
+use claude_sessions_core::attach::{attach_command, stop_command};
 use claude_sessions_core::launcher::{self, Request, resolve_directory};
 use claude_sessions_core::{accounts, mailbox, refresher};
 use serde::Serialize;
@@ -198,24 +198,63 @@ fn reassign(app: &AppHandle, shared: &Shared, tabs: &Tabs) {
     let _ = app.emit("sessions", &view);
 }
 
+/// The full id of the background session `short_id` of `account`.
+fn session_id_of(shared: &Shared, account: &str, short_id: &str) -> Result<String, String> {
+    let view = shared.view.lock().unwrap_or_else(PoisonError::into_inner);
+    let row = view.sessions.iter().find(|row| row.account == account && row.short_id.as_deref() == Some(short_id));
+    row.map(|row| row.info.session_id.clone()).ok_or_else(|| format!("no session {short_id}"))
+}
+
+/// Changes what is kept about the sessions, saved in `sessions.json` before it counts, then
+/// gives every session its name and visibility again.
+fn update_prefs(app: &AppHandle, shared: &Shared, change: impl FnOnce(&mut Prefs)) -> Result<(), String> {
+    let path = shared.prefs_file.as_ref()?;
+    {
+        let mut prefs = shared.prefs.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut next = prefs.clone();
+        change(&mut next);
+        store::save(path, &next).map_err(|error| format!("cannot save {}: {error}", path.display()))?;
+        *prefs = next;
+    }
+    let tabs = shared.workspace().tabs.clone();
+    reassign(app, shared, &tabs);
+    Ok(())
+}
+
 /// Gives the session a short name, kept in `sessions.json`; an empty one removes it.
 #[tauri::command]
 fn rename_session(app: AppHandle, shared: State<'_, Shared>, account: String, short_id: String, name: String) -> Result<(), String> {
-    let session_id = {
-        let view = shared.view.lock().unwrap_or_else(PoisonError::into_inner);
-        let row = view.sessions.iter().find(|row| row.account == account && row.short_id.as_deref() == Some(short_id.as_str()));
-        row.map(|row| row.info.session_id.clone()).ok_or_else(|| format!("no session {short_id}"))?
-    };
-    let path = shared.prefs_file.as_ref()?;
-    let mut prefs = shared.prefs.lock().unwrap_or_else(PoisonError::into_inner);
-    let mut next = prefs.clone();
-    prefs::set_label(&mut next, &session_id, &name);
-    store::save(path, &next).map_err(|error| format!("cannot save {}: {error}", path.display()))?;
-    *prefs = next;
-    drop(prefs);
-    let tabs = shared.workspace().tabs.clone();
-    reassign(&app, &shared, &tabs);
-    Ok(())
+    let session_id = session_id_of(&shared, &account, &short_id)?;
+    update_prefs(&app, &shared, |prefs| prefs::set_label(prefs, &session_id, &name))
+}
+
+/// Stops the session (its conversation is kept) and hides it from the bar; its panes empty.
+#[tauri::command]
+async fn hide_session(app: AppHandle, shared: State<'_, Shared>, account: String, short_id: String) -> Result<Tabs, String> {
+    let session_id = session_id_of(&shared, &account, &short_id)?;
+    let (stop_account, stop_id) = (account.clone(), short_id.clone());
+    let stopped = tauri::async_runtime::spawn_blocking(move || stop_command(&stop_account, &stop_id).output())
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| format!("cannot run claude-accounts: {error}"))?;
+    if !stopped.status.success() {
+        let reason = String::from_utf8_lossy(&stopped.stderr).trim().to_string();
+        return Err(format!("cannot stop {short_id}: {reason}"));
+    }
+    update_prefs(&app, &shared, |prefs| prefs::set_hidden(prefs, &session_id, true))?;
+    let mut workspace = shared.workspace();
+    // Detaching: the session is stopped already.
+    for pane in workspace.tabs.clear_session(&SessionKey { account, short_id }) {
+        workspace.attached.remove(&pane);
+    }
+    Ok(respond(&app, &shared, workspace))
+}
+
+/// A hidden session comes back to the bar.
+#[tauri::command]
+fn show_session(app: AppHandle, shared: State<'_, Shared>, account: String, short_id: String) -> Result<(), String> {
+    let session_id = session_id_of(&shared, &account, &short_id)?;
+    update_prefs(&app, &shared, |prefs| prefs::set_hidden(prefs, &session_id, false))
 }
 
 /// A tab for the folder typed in the page, kept in `projects.json`.
@@ -413,6 +452,8 @@ fn main() -> ExitCode {
             resize_split,
             add_project,
             rename_session,
+            hide_session,
+            show_session,
             close_tab,
             tab_step,
             go_tab,
