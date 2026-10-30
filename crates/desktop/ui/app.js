@@ -320,6 +320,8 @@ function openNewSessionForm() {
   const fields = form.elements;
   fields.account.replaceChildren(...lastView.accounts.map((account) => element("option", "", account)));
   const project = panes.activeTab().project;
+  // The account of the last session started in this project, while it still exists.
+  if (project && project.account && lastView.accounts.includes(project.account)) fields.account.value = project.account;
   fields.directory.value = project ? project.directory : "~";
   sessionDirectory.reset();
   fields.name.value = "";

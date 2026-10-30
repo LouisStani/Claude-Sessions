@@ -109,6 +109,23 @@ impl Tabs {
         self.tabs.iter().filter_map(|tab| tab.project.clone()).collect()
     }
 
+    /// The project holding `directory` keeps `account` for its next Ctrl+N. Returns whether
+    /// that changed something, so `projects.json` is written only then.
+    pub fn remember_account(&mut self, directory: &Path, account: &str) -> bool {
+        let projects = self.tabs.iter().enumerate().filter_map(|(index, tab)| tab.project.as_ref().map(|project| (index, project)));
+        let Some(index) = projects::owner(directory, projects) else {
+            return false;
+        };
+        let Some(project) = self.tabs[index].project.as_mut() else {
+            return false;
+        };
+        if project.account.as_deref() == Some(account) {
+            return false;
+        }
+        project.account = Some(account.to_string());
+        true
+    }
+
     /// The tab a session working in `directory` belongs to: its project's, else "other".
     pub fn owner_tab(&self, directory: &Path) -> PaneId {
         let projects = self.tabs.iter().filter_map(|tab| tab.project.as_ref().map(|project| (tab.id, project)));
@@ -473,5 +490,17 @@ mod tests {
         tabs.go(1);
         tabs.drop_restore();
         assert_eq!(restore_of(&tabs, 1), None);
+    }
+
+    #[test]
+    fn the_deepest_project_remembers_the_account_once() {
+        let mut tabs = Tabs::with_projects(vec![Project::new("/home/u/Dev".into()), Project::new("/home/u/Dev/api".into())]);
+        assert!(tabs.remember_account(Path::new("/home/u/Dev/api/src"), "pro"));
+        assert!(!tabs.remember_account(Path::new("/home/u/Dev/api"), "pro"), "the same account changes nothing");
+        assert!(!tabs.remember_account(Path::new("/tmp/elsewhere"), "louis"), "no project, nothing kept");
+        let accounts: Vec<_> = tabs.projects().into_iter().map(|project| project.account).collect();
+        assert_eq!(accounts, [None, Some("pro".to_string())]);
+        assert!(tabs.remember_account(Path::new("/home/u/Dev/api"), "louis"));
+        assert_eq!(tabs.projects()[1].account.as_deref(), Some("louis"));
     }
 }

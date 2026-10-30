@@ -89,22 +89,44 @@ struct Created {
     account: String,
     short_id: String,
     warnings: Vec<String>,
+    /// Where it runs, so its project remembers the account.
+    #[serde(skip)]
+    directory: PathBuf,
 }
 
 fn start_session(account: String, directory: &str, name: &str) -> Result<Created, String> {
     let home = std::env::home_dir().ok_or("HOME is not set")?;
     let request = Request { account, directory: resolve_directory(directory, &home)?, name: name.trim().to_string() };
     let launched = launcher::launch(&request)?;
-    Ok(Created { account: request.account, short_id: launched.short_id, warnings: launched.warnings })
+    Ok(Created { account: request.account, short_id: launched.short_id, warnings: launched.warnings, directory: request.directory })
 }
 
 /// Starting a session takes a few seconds: it runs off the window's thread.
 #[tauri::command]
-async fn new_session(shared: State<'_, Shared>, account: String, directory: String, name: String) -> Result<Created, String> {
+async fn new_session(app: AppHandle, shared: State<'_, Shared>, account: String, directory: String, name: String) -> Result<Created, String> {
     let _span = shared.trace.span("new_session");
-    tauri::async_runtime::spawn_blocking(move || start_session(account, &directory, &name))
+    let mut created = tauri::async_runtime::spawn_blocking(move || start_session(account, &directory, &name))
         .await
-        .map_err(|error| error.to_string())?
+        .map_err(|error| error.to_string())??;
+    if let Err(error) = remember_account(&app, &shared, &created) {
+        created.warnings.push(error);
+    }
+    Ok(created)
+}
+
+/// The project the new session runs in offers its account first at the next Ctrl+N.
+fn remember_account(app: &AppHandle, shared: &Shared, created: &Created) -> Result<(), String> {
+    let mut workspace = shared.workspace();
+    let mut next = workspace.tabs.clone();
+    if !next.remember_account(&created.directory, &created.account) {
+        return Ok(());
+    }
+    save_projects(shared, &next)?;
+    workspace.tabs = next;
+    let tabs = workspace.tabs.clone();
+    drop(workspace);
+    let _ = app.emit("tabs", &tabs);
+    Ok(())
 }
 
 /// The folders a directory field offers before anything is typed.

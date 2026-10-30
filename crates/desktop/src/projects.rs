@@ -9,13 +9,16 @@ use serde::{Deserialize, Serialize};
 pub struct Project {
     pub name: String,
     pub directory: PathBuf,
+    /// The account of the last session started here with Ctrl+N, which Ctrl+N offers first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
 }
 
 impl Project {
     /// Named after its folder.
     pub fn new(directory: PathBuf) -> Self {
         let name = directory.file_name().map_or_else(|| directory.display().to_string(), |name| name.to_string_lossy().into_owned());
-        Self { name, directory }
+        Self { name, directory, account: None }
     }
 }
 
@@ -53,6 +56,13 @@ mod tests {
         assert_eq!(owner_of("/home/u/Dev/blog/src/posts", &projects), Some(1));
         assert_eq!(owner_of("/home/u", &projects), None);
         assert_eq!(owner_of("/tmp", &projects), None);
+    }
+
+    #[test]
+    fn projects_written_before_accounts_still_load_and_no_account_writes_nothing() {
+        let loaded: Vec<Project> = serde_json::from_str(r#"[{"name":"api","directory":"/home/u/Dev/api"}]"#).unwrap();
+        assert_eq!(loaded, [project("/home/u/Dev/api")]);
+        assert_eq!(serde_json::to_string(&loaded[0]).unwrap(), r#"{"name":"api","directory":"/home/u/Dev/api"}"#);
     }
 
     #[test]
