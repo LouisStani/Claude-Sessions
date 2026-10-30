@@ -56,6 +56,13 @@ function render(view) {
     list.replaceChildren(...view.sessions.map(listItem));
   }
   document.getElementById("errors").replaceChildren(...view.errors.map((error) => element("li", "error", error)));
+  panes.renderBar();
+}
+
+// The title of a session shown in a pane, for the tab bar.
+function titleOf(key) {
+  const session = lastView.sessions.find((row) => row.account === key.account && row.short_id === key.short_id);
+  return session ? session.title : key.short_id;
 }
 
 function openSession(session) {
@@ -183,6 +190,11 @@ function shortcutFor(event) {
   const ctrlShift = event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
   if (ctrlShift && event.code === "KeyD") return { run: () => panes.split() };
   if (ctrlShift && event.code === "KeyW") return { run: () => panes.close() };
+  if (ctrlShift && event.code === "KeyT") return { run: () => panes.newTab() };
+  if (ctrlShift && event.code === "KeyX") return { run: () => panes.closeTab() };
+  if (ctrlShift && event.code === "KeyH") return { run: () => panes.tabStep(-1) };
+  if (ctrlShift && event.code === "KeyL") return { run: () => panes.tabStep(1) };
+  if (ctrlShift && digit) return { run: () => panes.goTab(Number(digit[1])) };
   return null;
 }
 
@@ -194,9 +206,10 @@ function onKey(event) {
   shortcut.run();
 }
 
-const panes = new Panes(document.getElementById("panes"), {
+const panes = new Panes(document.getElementById("panes"), document.getElementById("tabs"), {
   keyFilter: (event) => shortcutFor(event) === null,
   onChange: () => render(lastView),
+  titleOf,
 });
 
 document.addEventListener("keydown", onKey);
@@ -208,7 +221,7 @@ for (const dialog of document.querySelectorAll("dialog")) {
 }
 
 await listen("pane-ended", (event) => panes.ended(event.payload));
-await listen("layout", (event) => panes.render(event.payload));
+await listen("tabs", (event) => panes.render(event.payload));
 await listen("sessions", (event) => render(event.payload));
 await panes.load();
 render(await invoke("current_list"));

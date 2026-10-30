@@ -1,5 +1,5 @@
-// The panes on the right. Rust owns the tree (layout.rs): every change is a command, and this
-// module only draws the tree it gets back.
+// The tabs and panes on the right. Rust owns them (tabs.rs, layout.rs): every change is a
+// command, and this module only draws what it gets back.
 
 const { invoke, Channel } = window.__TAURI__.core;
 
@@ -73,26 +73,36 @@ class PaneView {
   }
 }
 
+function leaves(node, found = []) {
+  if (node.kind === "leaf") found.push(node);
+  else {
+    leaves(node.first, found);
+    leaves(node.second, found);
+  }
+  return found;
+}
+
 export class Panes {
-  constructor(container, { keyFilter, onChange }) {
+  constructor(container, bar, { keyFilter, onChange, titleOf }) {
     this.container = container;
+    this.bar = bar;
     this.keyFilter = keyFilter;
     this.onChange = onChange;
-    this.layout = null;
+    this.titleOf = titleOf;
+    this.state = null;
     this.views = new Map();
   }
 
   async load() {
-    this.render(await invoke("layout"));
+    this.render(await invoke("tabs"));
   }
 
-  leaves(node = this.layout.root, found = []) {
-    if (node.kind === "leaf") found.push(node);
-    else {
-      this.leaves(node.first, found);
-      this.leaves(node.second, found);
-    }
-    return found;
+  layout() {
+    return this.state.tabs.find((tab) => tab.id === this.state.active).layout;
+  }
+
+  allLeaves() {
+    return this.state.tabs.flatMap((tab) => leaves(tab.layout.root));
   }
 
   view(id) {
@@ -101,24 +111,24 @@ export class Panes {
   }
 
   active() {
-    return this.view(this.layout.active);
+    return this.view(this.layout().active);
   }
 
   shows(session) {
-    return this.layout !== null && this.leaves().some((leaf) => sameSession(leaf.session, session));
+    return this.state !== null && this.allLeaves().some((leaf) => sameSession(leaf.session, session));
   }
 
-  draw(node) {
+  draw(node, layout) {
     if (node.kind === "leaf") {
       const view = this.view(node.id);
-      view.element.classList.toggle("active", node.id === this.layout.active);
+      view.element.classList.toggle("active", node.id === layout.active);
       view.placeholder.hidden = node.session !== null || view.used;
       view.element.onmousedown = () => this.focusPane(node.id);
       return view.element;
     }
     const split = element("div", `split ${node.direction}`);
-    const first = this.draw(node.first);
-    const second = this.draw(node.second);
+    const first = this.draw(node.first, layout);
+    const second = this.draw(node.second, layout);
     first.style.flex = `${node.ratio} 1 0px`;
     second.style.flex = `${1 - node.ratio} 1 0px`;
     const divider = element("div", "divider");
@@ -127,22 +137,47 @@ export class Panes {
     return split;
   }
 
-  render(layout) {
-    this.layout = layout;
-    const ids = new Set(this.leaves().map((leaf) => leaf.id));
+  // Every tab stays in the page, hidden ones with `display: none`: their terminals keep
+  // receiving output and are never moved.
+  render(state) {
+    this.state = state;
+    const ids = new Set(this.allLeaves().map((leaf) => leaf.id));
     for (const [id, view] of this.views) {
       if (!ids.has(id)) {
         view.dispose();
         this.views.delete(id);
       }
     }
-    const root = this.draw(layout.root);
-    // A pane lifted to the root after a close still has the share it had in its split.
-    root.style.flex = "";
-    this.container.replaceChildren(root);
-    for (const id of ids) this.view(id).openOnce();
+    const pages = state.tabs.map((tab) => {
+      const page = element("div", "tab-page");
+      page.hidden = tab.id !== state.active;
+      const root = this.draw(tab.layout.root, tab.layout);
+      // A pane lifted to the root after a close still has the share it had in its split.
+      root.style.flex = "";
+      page.append(root);
+      return page;
+    });
+    this.container.replaceChildren(...pages);
+    // xterm measures its cells when opened, so only panes on screen are opened; every pane
+    // is created in the active tab.
+    for (const leaf of leaves(this.layout().root)) this.view(leaf.id).openOnce();
+    this.renderBar();
     this.focus();
     this.onChange();
+  }
+
+  renderBar() {
+    if (this.state === null) return;
+    this.bar.replaceChildren(
+      ...this.state.tabs.map((tab, index) => {
+        const shown = leaves(tab.layout.root).find((leaf) => leaf.id === tab.layout.active);
+        const title = shown && shown.session ? this.titleOf(shown.session) : "empty";
+        const button = element("button", "tab", `${index + 1} · ${title}`);
+        button.classList.toggle("active", tab.id === this.state.active);
+        button.onclick = () => this.goTab(index + 1);
+        return button;
+      }),
+    );
   }
 
   focus() {
@@ -171,7 +206,7 @@ export class Panes {
   }
 
   async focusPane(id) {
-    if (id !== this.layout.active) this.render(await invoke("focus_pane", { pane: id }));
+    if (id !== this.layout().active) this.render(await invoke("focus_pane", { pane: id }));
   }
 
   async step(step) {
@@ -187,14 +222,38 @@ export class Panes {
     this.render(await invoke("close_pane"));
   }
 
-  // Shows `session` in the active pane, or moves the focus to the pane already showing it.
+  async newTab() {
+    this.render(await invoke("new_tab"));
+  }
+
+  async closeTab() {
+    this.render(await invoke("close_tab"));
+  }
+
+  async tabStep(step) {
+    this.render(await invoke("tab_step", { step }));
+  }
+
+  async goTab(number) {
+    this.render(await invoke("go_tab", { number }));
+  }
+
+  // Shows `session` in the active pane. If a pane of any tab shows it already, Rust brings
+  // that tab and pane to the front instead.
   async open(session) {
-    const shownIn = this.leaves().find((leaf) => sameSession(leaf.session, session));
-    if (shownIn) {
-      await this.focusPane(shownIn.id);
+    const view = this.active();
+    const request = {
+      pane: view.id,
+      account: session.account,
+      shortId: session.short_id,
+      columns: view.terminal.cols,
+      rows: view.terminal.rows,
+    };
+    if (this.shows(session)) {
+      const opened = await invoke("open_session", { ...request, output: new Channel() });
+      this.render(opened.tabs);
       return;
     }
-    const view = this.active();
     const output = new Channel();
     const opening = { output, generation: null, ended: false };
     view.current = opening;
@@ -206,14 +265,7 @@ export class Panes {
     view.terminal.reset();
     let opened;
     try {
-      opened = await invoke("open_session", {
-        pane: view.id,
-        account: session.account,
-        shortId: session.short_id,
-        columns: view.terminal.cols,
-        rows: view.terminal.rows,
-        output,
-      });
+      opened = await invoke("open_session", { ...request, output });
     } catch (error) {
       if (view.current !== opening) return;
       view.showEnd();
@@ -224,7 +276,7 @@ export class Panes {
     if (opened.generation === null && view.current === opening) view.current = null;
     opening.generation = opened.generation;
     if (view.current === opening && view.lastEnded === opening.generation) view.showEnd();
-    this.render(opened.layout);
+    this.render(opened.tabs);
   }
 
   ended({ pane, generation }) {

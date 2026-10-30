@@ -2,6 +2,7 @@
 
 mod layout;
 mod pane;
+mod tabs;
 mod view;
 
 use std::collections::HashMap;
@@ -15,15 +16,16 @@ use serde::Serialize;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
-use crate::layout::{Layout, PaneId, SessionKey, Shown};
+use crate::layout::{PaneId, SessionKey, Shown};
 use crate::pane::Pane;
+use crate::tabs::Tabs;
 use crate::view::{ListView, SessionRow};
 
-/// The panes and the sessions attached in them. `generation` changes with every attach, so
+/// The tabs, their panes and the sessions attached in them. `generation` changes with every attach, so
 /// the end of a session that was since replaced in its pane is ignored.
 #[derive(Default)]
 struct Workspace {
-    layout: Layout,
+    tabs: Tabs,
     generation: u64,
     attached: HashMap<PaneId, (u64, Pane)>,
 }
@@ -83,70 +85,101 @@ struct Ended {
 /// pane showing it now has the focus.
 #[derive(Serialize)]
 struct Opened {
-    layout: Layout,
+    tabs: Tabs,
     generation: Option<u64>,
 }
 
 #[tauri::command]
-fn layout(shared: State<'_, Shared>) -> Layout {
-    shared.workspace().layout.clone()
+fn tabs(shared: State<'_, Shared>) -> Tabs {
+    shared.workspace().tabs.clone()
 }
 
 #[tauri::command]
-fn split_pane(shared: State<'_, Shared>, width: f64, height: f64) -> Layout {
+fn split_pane(shared: State<'_, Shared>, width: f64, height: f64) -> Tabs {
     let mut workspace = shared.workspace();
-    workspace.layout.split(width, height);
-    workspace.layout.clone()
+    workspace.tabs.split(width, height);
+    workspace.tabs.clone()
 }
 
 #[tauri::command]
-fn close_pane(shared: State<'_, Shared>) -> Layout {
+fn close_pane(shared: State<'_, Shared>) -> Tabs {
     let mut workspace = shared.workspace();
-    if let Some(closed) = workspace.layout.close() {
+    if let Some(closed) = workspace.tabs.current_mut().close() {
         // Detaching only: the background session keeps running in Claude Code.
         workspace.attached.remove(&closed);
     }
-    workspace.layout.clone()
+    workspace.tabs.clone()
 }
 
 #[tauri::command]
-fn focus_pane(shared: State<'_, Shared>, pane: PaneId) -> Layout {
+fn focus_pane(shared: State<'_, Shared>, pane: PaneId) -> Tabs {
     let mut workspace = shared.workspace();
-    workspace.layout.focus(pane);
-    workspace.layout.clone()
+    workspace.tabs.current_mut().focus(pane);
+    workspace.tabs.clone()
 }
 
 #[tauri::command]
-fn focus_step(shared: State<'_, Shared>, step: i64) -> Layout {
+fn focus_step(shared: State<'_, Shared>, step: i64) -> Tabs {
     let mut workspace = shared.workspace();
-    workspace.layout.focus_step(step);
-    workspace.layout.clone()
+    workspace.tabs.current_mut().focus_step(step);
+    workspace.tabs.clone()
 }
 
 #[tauri::command]
-fn resize_split(shared: State<'_, Shared>, split: PaneId, ratio: f32) -> Layout {
+fn resize_split(shared: State<'_, Shared>, split: PaneId, ratio: f32) -> Tabs {
     let mut workspace = shared.workspace();
-    workspace.layout.set_ratio(split, ratio);
-    workspace.layout.clone()
+    workspace.tabs.current_mut().set_ratio(split, ratio);
+    workspace.tabs.clone()
+}
+
+#[tauri::command]
+fn new_tab(shared: State<'_, Shared>) -> Tabs {
+    let mut workspace = shared.workspace();
+    workspace.tabs.new_tab();
+    workspace.tabs.clone()
+}
+
+#[tauri::command]
+fn close_tab(shared: State<'_, Shared>) -> Tabs {
+    let mut workspace = shared.workspace();
+    // Detaching only: the background sessions keep running in Claude Code.
+    for pane in workspace.tabs.close_tab().unwrap_or_default() {
+        workspace.attached.remove(&pane);
+    }
+    workspace.tabs.clone()
+}
+
+#[tauri::command]
+fn tab_step(shared: State<'_, Shared>, step: i64) -> Tabs {
+    let mut workspace = shared.workspace();
+    workspace.tabs.step(step);
+    workspace.tabs.clone()
+}
+
+#[tauri::command]
+fn go_tab(shared: State<'_, Shared>, number: usize) -> Tabs {
+    let mut workspace = shared.workspace();
+    workspace.tabs.go(number);
+    workspace.tabs.clone()
 }
 
 /// A session ended by itself: its pane is emptied, unless another session was opened there since.
 fn end_session(app: &AppHandle, pane: PaneId, generation: u64) {
     let shared = app.state::<Shared>();
-    let layout = {
+    let tabs = {
         let mut workspace = shared.workspace();
         if workspace.attached.get(&pane).map(|(current, _)| *current) != Some(generation) {
             return;
         }
         workspace.attached.remove(&pane);
-        workspace.layout.clear(pane);
-        workspace.layout.clone()
+        workspace.tabs.clear(pane);
+        workspace.tabs.clone()
     };
     let _ = app.emit("pane-ended", Ended { pane, generation });
-    let _ = app.emit("layout", &layout);
+    let _ = app.emit("tabs", &tabs);
 }
 
-/// Shows a session in `pane`, unless another pane already shows it. The session shown
+/// Shows a session in `pane`, unless another pane, in any tab, already shows it. The session shown
 /// there before is detached, not stopped.
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -162,9 +195,9 @@ fn open_session(
 ) -> Result<Opened, String> {
     let mut workspace = shared.workspace();
     let key = SessionKey { account: account.clone(), short_id: short_id.clone() };
-    match workspace.layout.show(pane, key) {
+    match workspace.tabs.show(pane, key) {
         None => return Err(format!("no pane {pane}")),
-        Some(Shown::Already(_)) => return Ok(Opened { layout: workspace.layout.clone(), generation: None }),
+        Some(Shown::Already(_)) => return Ok(Opened { tabs: workspace.tabs.clone(), generation: None }),
         Some(Shown::Attach) => {},
     }
     workspace.attached.remove(&pane);
@@ -184,10 +217,10 @@ fn open_session(
     match opened {
         Ok(attached) => {
             workspace.attached.insert(pane, (generation, attached));
-            Ok(Opened { layout: workspace.layout.clone(), generation: Some(generation) })
+            Ok(Opened { tabs: workspace.tabs.clone(), generation: Some(generation) })
         },
         Err(error) => {
-            workspace.layout.clear(pane);
+            workspace.tabs.clear(pane);
             Err(format!("cannot open {short_id}: {error}"))
         },
     }
@@ -235,12 +268,16 @@ fn main() -> ExitCode {
             current_list,
             filter_sessions,
             new_session,
-            layout,
+            tabs,
             split_pane,
             close_pane,
             focus_pane,
             focus_step,
             resize_split,
+            new_tab,
+            close_tab,
+            tab_step,
+            go_tab,
             open_session,
             write_input,
             resize_pane

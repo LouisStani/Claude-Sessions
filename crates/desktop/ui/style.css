@@ -115,13 +115,55 @@ ol, ul {
   box-shadow: inset 2px 0 0 var(--text);
 }
 
+#workspace {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+#tabs {
+  display: flex;
+  gap: 2px;
+  padding: 4px 8px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.tab {
+  flex-shrink: 0;
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  border-radius: 6px 6px 0 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.tab.active {
+  background: var(--panel);
+  color: var(--text);
+}
+
 #panes {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.tab-page {
   flex: 1;
   min-width: 0;
   display: flex;
 }
 
-#panes > * {
+.tab-page[hidden] {
+  display: none;
+}
+
+.tab-page > * {
   flex: 1;
 }
 

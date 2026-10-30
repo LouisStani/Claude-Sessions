@@ -49,18 +49,31 @@ pub enum Shown {
     Already(PaneId),
 }
 
+/// Hands out the ids of panes and splits. One counter serves every tab, so a pane id is
+/// unique in the whole window.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Ids {
+    next: PaneId,
+}
+
+impl Default for Ids {
+    fn default() -> Self {
+        Self { next: 1 }
+    }
+}
+
+impl Ids {
+    pub fn take(&mut self) -> PaneId {
+        let id = self.next;
+        self.next += 1;
+        id
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Layout {
     root: Node,
     active: PaneId,
-    #[serde(skip)]
-    next_id: PaneId,
-}
-
-impl Default for Layout {
-    fn default() -> Self {
-        Self { root: Node::Leaf { id: 1, session: None }, active: 1, next_id: 2 }
-    }
 }
 
 fn collect_leaves<'a>(node: &'a Node, found: &mut Vec<(PaneId, &'a Option<SessionKey>)>) {
@@ -103,6 +116,17 @@ fn without(node: Node, wanted: PaneId) -> Node {
 }
 
 impl Layout {
+    /// One empty pane, active.
+    pub fn new(ids: &mut Ids) -> Self {
+        let pane = ids.take();
+        Self { root: Node::Leaf { id: pane, session: None }, active: pane }
+    }
+
+    #[cfg(test)]
+    pub fn active(&self) -> PaneId {
+        self.active
+    }
+
     /// Panes in reading order (left to right, top to bottom): the order of Ctrl+H/L.
     pub fn leaves(&self) -> Vec<PaneId> {
         let mut found = Vec::new();
@@ -110,18 +134,12 @@ impl Layout {
         found.into_iter().map(|(id, _)| id).collect()
     }
 
-    fn new_id(&mut self) -> PaneId {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
-    }
-
     /// Cuts the active pane in two, side by side unless it is taller than wide. The new,
     /// empty pane gets the focus.
-    pub fn split(&mut self, width: f64, height: f64) -> PaneId {
+    pub fn split(&mut self, ids: &mut Ids, width: f64, height: f64) -> PaneId {
         let direction = if width >= height { Direction::Row } else { Direction::Column };
-        let split_id = self.new_id();
-        let pane = self.new_id();
+        let split_id = ids.take();
+        let pane = ids.take();
         let active = self.active;
         if let Some(node) = find_mut(&mut self.root, active) {
             let old = std::mem::replace(node, Node::Leaf { id: 0, session: None });
@@ -179,13 +197,18 @@ impl Layout {
         }
     }
 
-    /// Where `session` should appear when it is opened in `pane`; None if the pane is unknown.
-    pub fn show(&mut self, pane: PaneId, session: SessionKey) -> Option<Shown> {
+    /// The pane showing `session`, if any.
+    pub fn shown_in(&self, session: &SessionKey) -> Option<PaneId> {
         let mut found = Vec::new();
         collect_leaves(&self.root, &mut found);
-        if let Some((shown_in, _)) = found.iter().find(|(_, key)| key.as_ref() == Some(&session)) {
-            self.active = *shown_in;
-            return Some(Shown::Already(*shown_in));
+        found.into_iter().find(|(_, key)| key.as_ref() == Some(session)).map(|(id, _)| id)
+    }
+
+    /// Where `session` should appear when it is opened in `pane`; None if the pane is unknown.
+    pub fn show(&mut self, pane: PaneId, session: SessionKey) -> Option<Shown> {
+        if let Some(shown_in) = self.shown_in(&session) {
+            self.active = shown_in;
+            return Some(Shown::Already(shown_in));
         }
         let Some(Node::Leaf { session: slot, .. }) = find_mut(&mut self.root, pane) else {
             return None;
@@ -218,41 +241,46 @@ mod tests {
         }
     }
 
+    fn fresh() -> (Layout, Ids) {
+        let mut ids = Ids::default();
+        (Layout::new(&mut ids), ids)
+    }
+
     /// Four panes: 1 | (3 above (5 | 7)).
     fn four_panes() -> Layout {
-        let mut layout = Layout::default();
-        layout.split(1000.0, 500.0);
-        layout.split(500.0, 600.0);
-        layout.split(500.0, 300.0);
+        let (mut layout, mut ids) = fresh();
+        layout.split(&mut ids, 1000.0, 500.0);
+        layout.split(&mut ids, 500.0, 600.0);
+        layout.split(&mut ids, 500.0, 300.0);
         layout
     }
 
     #[test]
     fn a_new_layout_has_one_empty_active_pane() {
-        let layout = Layout::default();
+        let (layout, _) = fresh();
         assert_eq!(layout.leaves(), [1]);
-        assert_eq!(layout.active, 1);
+        assert_eq!(layout.active(), 1);
     }
 
     #[test]
     fn split_direction_follows_the_shape_of_the_pane() {
-        let mut wide = Layout::default();
-        wide.split(1000.0, 500.0);
+        let (mut wide, mut ids) = fresh();
+        wide.split(&mut ids, 1000.0, 500.0);
         assert_eq!(direction_of_root(&wide), Some(Direction::Row));
-        let mut tall = Layout::default();
-        tall.split(500.0, 1000.0);
+        let (mut tall, mut ids) = fresh();
+        tall.split(&mut ids, 500.0, 1000.0);
         assert_eq!(direction_of_root(&tall), Some(Direction::Column));
-        let mut square = Layout::default();
-        square.split(500.0, 500.0);
+        let (mut square, mut ids) = fresh();
+        square.split(&mut ids, 500.0, 500.0);
         assert_eq!(direction_of_root(&square), Some(Direction::Row));
     }
 
     #[test]
     fn the_new_pane_comes_after_the_split_one_and_gets_the_focus() {
-        let mut layout = Layout::default();
-        let pane = layout.split(1000.0, 500.0);
+        let (mut layout, mut ids) = fresh();
+        let pane = layout.split(&mut ids, 1000.0, 500.0);
         assert_eq!(layout.leaves(), [1, pane]);
-        assert_eq!(layout.active, pane);
+        assert_eq!(layout.active(), pane);
         assert_eq!(four_panes().leaves(), [1, 3, 5, 7]);
     }
 
@@ -262,7 +290,7 @@ mod tests {
         layout.focus(5);
         assert_eq!(layout.close(), Some(5));
         assert_eq!(layout.leaves(), [1, 3, 7]);
-        assert_eq!(layout.active, 3);
+        assert_eq!(layout.active(), 3);
         let Node::Split { second, .. } = &layout.root else { panic!("root should stay a split") };
         let Node::Split { direction, first, second: lifted, .. } = second.as_ref() else {
             panic!("3 and 7 should share a split")
@@ -278,15 +306,15 @@ mod tests {
         layout.focus(1);
         assert_eq!(layout.close(), Some(1));
         assert_eq!(layout.leaves(), [3, 5, 7]);
-        assert_eq!(layout.active, 3);
+        assert_eq!(layout.active(), 3);
     }
 
     #[test]
     fn the_last_pane_cannot_be_closed() {
-        let mut layout = Layout::default();
+        let (mut layout, mut ids) = fresh();
         assert_eq!(layout.close(), None);
         assert_eq!(layout.leaves(), [1]);
-        layout.split(1000.0, 500.0);
+        layout.split(&mut ids, 1000.0, 500.0);
         assert!(layout.close().is_some());
         assert_eq!(layout.close(), None);
         assert_eq!(layout.leaves(), [1]);
@@ -295,13 +323,13 @@ mod tests {
     #[test]
     fn focus_steps_wrap_around_in_reading_order() {
         let mut layout = four_panes();
-        assert_eq!(layout.active, 7);
+        assert_eq!(layout.active(), 7);
         layout.focus_step(1);
-        assert_eq!(layout.active, 1);
+        assert_eq!(layout.active(), 1);
         layout.focus_step(-1);
-        assert_eq!(layout.active, 7);
+        assert_eq!(layout.active(), 7);
         layout.focus_step(-1);
-        assert_eq!(layout.active, 5);
+        assert_eq!(layout.active(), 5);
     }
 
     #[test]
@@ -310,13 +338,13 @@ mod tests {
         assert!(layout.focus(3));
         assert!(!layout.focus(2), "2 is a split, not a pane");
         assert!(!layout.focus(99));
-        assert_eq!(layout.active, 3);
+        assert_eq!(layout.active(), 3);
     }
 
     #[test]
     fn ratio_is_bounded_and_unknown_splits_are_ignored() {
-        let mut layout = Layout::default();
-        layout.split(1000.0, 500.0);
+        let (mut layout, mut ids) = fresh();
+        layout.split(&mut ids, 1000.0, 500.0);
         let ratio = |layout: &Layout| match &layout.root {
             Node::Split { ratio, .. } => *ratio,
             Node::Leaf { .. } => f32::NAN,
@@ -337,19 +365,19 @@ mod tests {
 
     #[test]
     fn a_session_shown_elsewhere_moves_the_focus_instead_of_attaching_twice() {
-        let mut layout = Layout::default();
+        let (mut layout, mut ids) = fresh();
         assert_eq!(layout.show(1, key("aaa")), Some(Shown::Attach));
-        let second = layout.split(1000.0, 500.0);
+        let second = layout.split(&mut ids, 1000.0, 500.0);
         assert_eq!(layout.show(second, key("aaa")), Some(Shown::Already(1)));
-        assert_eq!(layout.active, 1);
+        assert_eq!(layout.active(), 1);
         assert_eq!(layout.show(second, key("bbb")), Some(Shown::Attach));
-        assert_eq!(layout.active, second);
+        assert_eq!(layout.active(), second);
         assert_eq!(layout.show(99, key("ccc")), None);
     }
 
     #[test]
     fn a_cleared_pane_can_show_its_session_again() {
-        let mut layout = Layout::default();
+        let (mut layout, _) = fresh();
         layout.show(1, key("aaa"));
         layout.clear(1);
         assert_eq!(layout.show(1, key("aaa")), Some(Shown::Attach));
@@ -357,14 +385,13 @@ mod tests {
 
     #[test]
     fn the_page_gets_the_tree_and_the_active_pane() {
-        let mut layout = Layout::default();
-        layout.split(1000.0, 500.0);
+        let (mut layout, mut ids) = fresh();
+        layout.split(&mut ids, 1000.0, 500.0);
         layout.show(3, key("aaa"));
         let json = serde_json::to_value(&layout).unwrap_or_default();
         assert_eq!(json["active"], 3);
         assert_eq!(json["root"]["kind"], "split");
         assert_eq!(json["root"]["direction"], "row");
         assert_eq!(json["root"]["second"]["session"]["short_id"], "aaa");
-        assert!(json.get("next_id").is_none());
     }
 }
