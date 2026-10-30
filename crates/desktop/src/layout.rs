@@ -1,7 +1,7 @@
 //! The panes of the window: a tree of splits whose leaves show at most one session each.
 //! The page only draws it; every change goes through here.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 pub type PaneId = u64;
 
@@ -9,7 +9,7 @@ pub type PaneId = u64;
 const MIN_RATIO: f32 = 0.1;
 const MAX_RATIO: f32 = 0.9;
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionKey {
     pub account: String,
     pub short_id: String,

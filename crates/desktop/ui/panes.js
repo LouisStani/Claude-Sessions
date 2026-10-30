@@ -180,6 +180,11 @@ export class Panes {
     return tab && tab.project ? tab.project.name : null;
   }
 
+  // No pane of `tab` shows a session.
+  tabEmpty(tab) {
+    return leaves(tab.layout.root).every((leaf) => leaf.session === null);
+  }
+
   allLeaves() {
     return this.state.tabs.flatMap((tab) => leaves(tab.layout.root));
   }

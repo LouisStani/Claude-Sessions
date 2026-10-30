@@ -1,9 +1,10 @@
 //! The tabs of the window, each with its own tree of panes: "other" first, then one per
-//! project. Hidden tabs keep their sessions attached; pane ids are unique across tabs.
+//! project. Hidden tabs keep their sessions attached; pane ids are unique across tabs. The
+//! active tab and the session of each come back at the next launch (`Saved`).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::layout::{Ids, Layout, PaneId, SessionKey, Shown};
 use crate::projects::{self, Project};
@@ -14,6 +15,24 @@ pub struct Tab {
     layout: Layout,
     /// None for "other", whose bar shows the sessions of no project.
     project: Option<Project>,
+    /// The session this tab showed when the app last closed: the page opens it at the first
+    /// visit, unless a session was opened here before.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    restore: Option<SessionKey>,
+}
+
+/// What `workspace.json` keeps: the active tab and the session each tab showed, tabs named
+/// by their project's folder (None for "other").
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Saved {
+    active: Option<PathBuf>,
+    shown: Vec<SavedTab>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct SavedTab {
+    project: Option<PathBuf>,
+    session: SessionKey,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -27,7 +46,7 @@ pub struct Tabs {
 impl Default for Tabs {
     fn default() -> Self {
         let mut ids = Ids::default();
-        let all = Tab { id: ids.take(), layout: Layout::new(&mut ids), project: None };
+        let all = Tab { id: ids.take(), layout: Layout::new(&mut ids), project: None, restore: None };
         Self { active: all.id, tabs: vec![all], ids }
     }
 }
@@ -44,7 +63,7 @@ impl Tabs {
     }
 
     fn push(&mut self, project: Project) {
-        let tab = Tab { id: self.ids.take(), layout: Layout::new(&mut self.ids), project: Some(project) };
+        let tab = Tab { id: self.ids.take(), layout: Layout::new(&mut self.ids), project: Some(project), restore: None };
         self.active = tab.id;
         self.tabs.push(tab);
     }
@@ -120,16 +139,54 @@ impl Tabs {
     }
 
     /// Like `Layout::show`, across tabs: a session shown in another tab brings that tab and
-    /// its pane to the front instead of being attached twice.
+    /// its pane to the front instead of being attached twice. The tab showing it waits for
+    /// nothing any more.
     pub fn show(&mut self, pane: PaneId, session: SessionKey) -> Option<Shown> {
         for tab in &mut self.tabs {
             if let Some(shown_in) = tab.layout.shown_in(&session) {
                 tab.layout.focus(shown_in);
+                tab.restore = None;
                 self.active = tab.id;
                 return Some(Shown::Already(shown_in));
             }
         }
-        self.current_mut().show(pane, session)
+        let index = self.index();
+        self.tabs[index].restore = None;
+        self.tabs[index].layout.show(pane, session)
+    }
+
+    /// The active tab no longer waits for its session: it is gone or belongs elsewhere now.
+    pub fn drop_restore(&mut self) {
+        let index = self.index();
+        self.tabs[index].restore = None;
+    }
+
+    /// The active tab, and the session in the active pane of each tab, or the one it still
+    /// waits for.
+    pub fn saved(&self) -> Saved {
+        let folder = |tab: &Tab| tab.project.as_ref().map(|project| project.directory.clone());
+        let shown = self
+            .tabs
+            .iter()
+            .filter_map(|tab| {
+                let session = tab.layout.active_session().or(tab.restore.as_ref())?;
+                Some(SavedTab { project: folder(tab), session: session.clone() })
+            })
+            .collect();
+        Saved { active: folder(&self.tabs[self.index()]), shown }
+    }
+
+    /// Back to the tab and sessions of `saved`; tabs of projects since removed are ignored.
+    pub fn restore(&mut self, saved: &Saved) {
+        let folder = |tab: &Tab| tab.project.as_ref().map(|project| project.directory.clone());
+        if let Some(tab) = self.tabs.iter().find(|tab| folder(tab) == saved.active) {
+            self.active = tab.id;
+        }
+        for kept in &saved.shown {
+            if let Some(tab) = self.tabs.iter_mut().find(|tab| folder(tab) == kept.project) {
+                tab.restore = Some(kept.session.clone());
+            }
+        }
     }
 
     /// Every pane showing `session`, in any tab, shows nothing now: returns them.
@@ -347,5 +404,74 @@ mod tests {
         assert_eq!(tabs.watched(), None);
         tabs.go(1);
         assert_eq!(tabs.watched(), Some(&key("aaa")));
+    }
+
+    /// "other", then api and blog; api shows "aaa" in its active pane, blog was never
+    /// visited and waits for "bbb", and api is active.
+    fn worked_in() -> Tabs {
+        let mut tabs = Tabs::with_projects(vec![Project::new("/home/u/api".into()), Project::new("/home/u/blog".into())]);
+        tabs.tabs[2].restore = Some(key("bbb"));
+        tabs.go(2);
+        let pane = tabs.current_mut().active();
+        tabs.show(pane, key("aaa"));
+        tabs
+    }
+
+    fn restore_of(tabs: &Tabs, number: usize) -> Option<&SessionKey> {
+        tabs.tabs[number - 1].restore.as_ref()
+    }
+
+    #[test]
+    fn saved_holds_the_active_tab_and_what_each_tab_shows_or_waits_for() {
+        let saved = worked_in().saved();
+        assert_eq!(saved.active, Some(PathBuf::from("/home/u/api")));
+        assert_eq!(
+            saved.shown,
+            [
+                SavedTab { project: Some("/home/u/api".into()), session: key("aaa") },
+                SavedTab { project: Some("/home/u/blog".into()), session: key("bbb") },
+            ]
+        );
+    }
+
+    #[test]
+    fn restoring_brings_back_the_tab_and_what_each_tab_waits_for() {
+        let json = serde_json::to_string(&worked_in().saved()).unwrap();
+        let mut tabs = Tabs::with_projects(vec![Project::new("/home/u/api".into()), Project::new("/home/u/blog".into())]);
+        tabs.restore(&serde_json::from_str(&json).unwrap());
+        assert_eq!(tabs.index(), 1);
+        assert_eq!(restore_of(&tabs, 1), None);
+        assert_eq!(restore_of(&tabs, 2), Some(&key("aaa")));
+        assert_eq!(restore_of(&tabs, 3), Some(&key("bbb")));
+        assert!(tabs.tabs.iter().all(|tab| tab.layout.active_session().is_none()), "nothing is attached before a visit");
+    }
+
+    #[test]
+    fn a_removed_project_is_ignored_and_other_comes_first() {
+        let saved = worked_in().saved();
+        let mut tabs = Tabs::with_projects(vec![Project::new("/home/u/blog".into())]);
+        tabs.restore(&saved);
+        assert_eq!(tabs.index(), 0, "api is gone: other is active");
+        assert_eq!(restore_of(&tabs, 2), Some(&key("bbb")));
+        assert_eq!(tabs.tabs.len(), 2);
+    }
+
+    #[test]
+    fn opening_a_session_in_a_tab_ends_its_wait() {
+        let mut tabs = worked_in();
+        tabs.go(3);
+        let pane = tabs.current_mut().active();
+        tabs.show(pane, key("ccc"));
+        assert_eq!(restore_of(&tabs, 3), None);
+        tabs.tabs[1].restore = Some(key("zzz"));
+        tabs.go(1);
+        let pane = tabs.current_mut().active();
+        tabs.show(pane, key("aaa"));
+        assert_eq!(tabs.index(), 1, "aaa is shown in api already");
+        assert_eq!(restore_of(&tabs, 2), None);
+        tabs.tabs[0].restore = Some(key("zzz"));
+        tabs.go(1);
+        tabs.drop_restore();
+        assert_eq!(restore_of(&tabs, 1), None);
     }
 }

@@ -27,7 +27,7 @@ use crate::layout::{PaneId, SessionKey, Shown};
 use crate::pane::Pane;
 use crate::prefs::Prefs;
 use crate::projects::Project;
-use crate::tabs::Tabs;
+use crate::tabs::{Saved, Tabs};
 use crate::trace::Trace;
 use crate::view::{ListView, SessionRow};
 
@@ -51,6 +51,10 @@ struct Shared {
     /// The short names given to sessions, kept like the projects.
     prefs: Mutex<Prefs>,
     prefs_file: Result<PathBuf, String>,
+    /// The active tab and each tab's session, kept for the next launch like the projects;
+    /// `saved` is what the file holds now.
+    workspace_file: Result<PathBuf, String>,
+    saved: Mutex<Saved>,
     /// Off unless `CLAUDE_SESSIONS_TRACE` is set.
     trace: Trace,
 }
@@ -145,11 +149,29 @@ fn detach(workspace: &mut Workspace, pane: PaneId) {
     }
 }
 
+/// Writes `workspace.json` when the active tab or a tab's session changed. A failed write is
+/// tried again at the next change.
+fn remember(shared: &Shared, tabs: &Tabs) {
+    let Ok(path) = &shared.workspace_file else {
+        return;
+    };
+    let next = tabs.saved();
+    let mut saved = shared.saved.lock().unwrap_or_else(PoisonError::into_inner);
+    if *saved == next {
+        return;
+    }
+    match store::save(path, &next) {
+        Ok(()) => *saved = next,
+        Err(error) => shared.trace.record(&format!("cannot save {}: {error}", path.display()), Duration::ZERO),
+    }
+}
+
 /// Ends every command that may move the focus: the session now looked at loses its
 /// "finished" mark. The two locks are never held together.
 fn respond(app: &AppHandle, shared: &Shared, workspace: MutexGuard<'_, Workspace>) -> Tabs {
     let tabs = workspace.tabs.clone();
     drop(workspace);
+    remember(shared, &tabs);
     if let Some(key) = tabs.watched() {
         let changed = {
             let mut view = shared.view.lock().unwrap_or_else(PoisonError::into_inner);
@@ -346,6 +368,7 @@ fn end_session(app: &AppHandle, pane: PaneId, generation: u64) {
         workspace.tabs.clear(pane);
         workspace.tabs.clone()
     };
+    remember(&shared, &tabs);
     let _ = app.emit("pane-ended", Ended { pane, generation });
     let _ = app.emit("tabs", &tabs);
 }
@@ -405,6 +428,15 @@ fn open_session(
             Err(format!("cannot open {short_id}: {error}"))
         },
     }
+}
+
+/// The session the active tab waited for is gone, or belongs to another tab now.
+#[tauri::command]
+fn drop_restore(app: AppHandle, shared: State<'_, Shared>) -> Tabs {
+    let _span = shared.trace.span("drop_restore");
+    let mut workspace = shared.workspace();
+    workspace.tabs.drop_restore();
+    respond(&app, &shared, workspace)
 }
 
 /// Whether the page measures too: it asks once, when it loads.
@@ -512,7 +544,10 @@ fn main() -> ExitCode {
     startup_errors.extend(accounts::check_launcher_version().err().map(|error| error.to_string()));
     let (projects, projects_file) = load_file::<Vec<Project>>("projects.json", &mut startup_errors);
     let (prefs, prefs_file) = load_file::<Prefs>("sessions.json", &mut startup_errors);
-    let workspace = Workspace { tabs: Tabs::with_projects(projects), ..Workspace::default() };
+    let (saved, workspace_file) = load_file::<Saved>("workspace.json", &mut startup_errors);
+    let mut restored = Tabs::with_projects(projects);
+    restored.restore(&saved);
+    let workspace = Workspace { tabs: restored, ..Workspace::default() };
     let shared = Shared {
         view: Mutex::new(ListView::default()),
         startup_errors,
@@ -520,6 +555,8 @@ fn main() -> ExitCode {
         projects_file,
         prefs: Mutex::new(prefs),
         prefs_file,
+        workspace_file,
+        saved: Mutex::new(saved),
         trace: timings,
     };
     let built = tauri::Builder::default()
@@ -544,6 +581,7 @@ fn main() -> ExitCode {
             tab_step,
             go_tab,
             open_session,
+            drop_restore,
             trace_enabled,
             trace,
             write_input,

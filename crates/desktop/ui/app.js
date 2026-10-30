@@ -168,6 +168,28 @@ function render(view) {
   panes.renderBar();
   panes.decorate();
   mark("render sessions", start);
+  restoreTab();
+}
+
+// Tabs whose session is being opened again, so that a render meanwhile does not open it twice.
+const restoring = new Set();
+
+// The first visit of a tab since launch opens the session it showed last, once the list
+// is known, if it is still there and still belongs to this tab; otherwise the tab stops
+// waiting for it.
+async function restoreTab() {
+  const tab = panes.state === null ? null : panes.activeTab();
+  if (!tab || !tab.restore || !lastView.loaded || restoring.has(tab.id) || !panes.tabEmpty(tab)) return;
+  restoring.add(tab.id);
+  try {
+    const session = rowOf(tab.restore);
+    if (session && session.short_id && !session.hidden && session.tab === tab.id) await openSession(session);
+    else panes.render(await invoke("drop_restore"));
+  } catch (error) {
+    setStatus(`${error}`);
+  } finally {
+    restoring.delete(tab.id);
+  }
 }
 
 // Claude finished a turn in this session and it has not been looked at since.
