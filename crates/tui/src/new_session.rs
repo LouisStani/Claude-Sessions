@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use claude_sessions_core::launcher::{Request, expand_home};
+use claude_sessions_core::launcher::{Request, resolve_directory};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -94,11 +94,13 @@ impl NewSessionForm {
             self.error = Some("no accounts: claude-accounts add <name>".into());
             return FormOutcome::Continue;
         };
-        let directory = expand_home(self.directory.trim(), home);
-        if !directory.is_dir() {
-            self.error = Some(format!("no such directory: {}", directory.display()));
-            return FormOutcome::Continue;
-        }
+        let directory = match resolve_directory(&self.directory, home) {
+            Ok(directory) => directory,
+            Err(error) => {
+                self.error = Some(error);
+                return FormOutcome::Continue;
+            },
+        };
         FormOutcome::Submit(Request {
             account: account.clone(),
             directory,

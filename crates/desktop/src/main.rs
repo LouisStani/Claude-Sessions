@@ -7,12 +7,14 @@ use std::process::ExitCode;
 use std::sync::{Mutex, PoisonError};
 
 use claude_sessions_core::attach::attach_command;
+use claude_sessions_core::launcher::{self, Request, resolve_directory};
 use claude_sessions_core::{accounts, refresher};
+use serde::Serialize;
 use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 use crate::pane::Pane;
-use crate::view::ListView;
+use crate::view::{ListView, SessionRow};
 
 /// The session shown on the right. `generation` changes with every session opened, so the
 /// page can ignore the end of a session it no longer shows.
@@ -38,6 +40,33 @@ impl Shared {
 #[tauri::command]
 fn current_list(shared: State<'_, Shared>) -> ListView {
     shared.view.lock().unwrap_or_else(PoisonError::into_inner).clone()
+}
+
+#[tauri::command]
+fn filter_sessions(shared: State<'_, Shared>, query: String) -> Vec<SessionRow> {
+    view::filter(&shared.view.lock().unwrap_or_else(PoisonError::into_inner), &query)
+}
+
+#[derive(Serialize)]
+struct Created {
+    account: String,
+    short_id: String,
+    warnings: Vec<String>,
+}
+
+fn start_session(account: String, directory: &str, name: &str) -> Result<Created, String> {
+    let home = std::env::home_dir().ok_or("HOME is not set")?;
+    let request = Request { account, directory: resolve_directory(directory, &home)?, name: name.trim().to_string() };
+    let launched = launcher::launch(&request)?;
+    Ok(Created { account: request.account, short_id: launched.short_id, warnings: launched.warnings })
+}
+
+/// Starting a session takes a few seconds: it runs off the window's thread.
+#[tauri::command]
+async fn new_session(account: String, directory: String, name: String) -> Result<Created, String> {
+    tauri::async_runtime::spawn_blocking(move || start_session(account, &directory, &name))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 /// Replaces the session on the right; the one shown before is detached, not stopped.
@@ -110,7 +139,14 @@ fn main() -> ExitCode {
     let shared = Shared { view: Mutex::new(ListView::default()), startup_errors, slot: Mutex::default() };
     let built = tauri::Builder::default()
         .manage(shared)
-        .invoke_handler(tauri::generate_handler![current_list, open_session, write_input, resize_pane])
+        .invoke_handler(tauri::generate_handler![
+            current_list,
+            filter_sessions,
+            new_session,
+            open_session,
+            write_input,
+            resize_pane
+        ])
         .setup(|app| {
             let handle = app.handle().clone();
             refresher::spawn(move |update| publish(&handle, update));

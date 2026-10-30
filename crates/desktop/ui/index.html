@@ -15,10 +15,25 @@
     <h1>sessions</h1>
     <ol id="sessions"></ol>
     <ul id="errors"></ul>
+    <p id="status"></p>
   </aside>
   <main id="pane">
     <div id="terminal"></div>
     <p id="placeholder">select a session</p>
   </main>
+  <dialog id="new-session">
+    <form id="new-form">
+      <h1>new session</h1>
+      <label>account <select name="account"></select></label>
+      <label>directory <input name="directory" spellcheck="false" autocomplete="off"></label>
+      <label>name <input name="name" placeholder="chosen by Claude Code" spellcheck="false" autocomplete="off"></label>
+      <p id="new-message"></p>
+      <button type="submit">start</button>
+    </form>
+  </dialog>
+  <dialog id="picker">
+    <input id="picker-query" placeholder="search sessions" spellcheck="false" autocomplete="off">
+    <ol id="picker-results"></ol>
+  </dialog>
 </body>
 </html>

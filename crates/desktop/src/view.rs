@@ -2,6 +2,7 @@
 
 use claude_sessions_core::accounts::SessionInfo;
 use claude_sessions_core::refresher::Update;
+use claude_sessions_core::search::matches;
 use serde::Serialize;
 
 /// Only the first nine sessions get a number, like Alt+1..9 in the terminal.
@@ -17,12 +18,17 @@ pub struct SessionRow {
     pub state: &'static str,
     pub isolated: bool,
     pub unread: usize,
+    /// Kept for Ctrl+P, which searches the same fields as the terminal picker.
+    #[serde(skip)]
+    pub info: SessionInfo,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct ListView {
     /// False until the first refresh, so the page can say "loading…" instead of "no sessions".
     pub loaded: bool,
+    /// Offered by the Ctrl+N form.
+    pub accounts: Vec<String>,
     pub sessions: Vec<SessionRow>,
     pub errors: Vec<String>,
 }
@@ -36,6 +42,7 @@ fn row(index: usize, session: &SessionInfo, unread: usize) -> SessionRow {
         state: session.state.label(),
         isolated: session.isolated,
         unread,
+        info: session.clone(),
     }
 }
 
@@ -44,6 +51,7 @@ pub fn apply(previous: &ListView, update: Update) -> ListView {
     match update {
         Ok((snapshot, unread)) => ListView {
             loaded: true,
+            accounts: snapshot.accounts,
             sessions: snapshot
                 .sessions
                 .iter()
@@ -54,10 +62,16 @@ pub fn apply(previous: &ListView, update: Update) -> ListView {
         },
         Err(error) => ListView {
             loaded: previous.loaded,
+            accounts: previous.accounts.clone(),
             sessions: previous.sessions.clone(),
             errors: vec![format!("session list unavailable: {error}")],
         },
     }
+}
+
+/// The rows Ctrl+P offers for `query`, in list order.
+pub fn filter(view: &ListView, query: &str) -> Vec<SessionRow> {
+    view.sessions.iter().filter(|row| matches(&row.info, query)).cloned().collect()
 }
 
 #[cfg(test)]
@@ -82,6 +96,10 @@ mod tests {
 
     fn snapshot(sessions: Vec<SessionInfo>) -> Snapshot {
         Snapshot { sessions, ..Snapshot::default() }
+    }
+
+    fn titles(rows: &[SessionRow]) -> Vec<&str> {
+        rows.iter().map(|row| row.title.as_str()).collect()
     }
 
     #[test]
@@ -133,4 +151,25 @@ mod tests {
         assert_eq!(view.errors, ["session list unavailable: HOME is not set"]);
     }
 
+    #[test]
+    fn accounts_come_from_the_snapshot_and_survive_a_failed_refresh() {
+        let listed = Snapshot { accounts: vec!["louis".into(), "lystriq".into()], ..Snapshot::default() };
+        let view = apply(&ListView::default(), Ok((listed, HashMap::new())));
+        assert_eq!(view.accounts, ["louis", "lystriq"]);
+        let failed = apply(&view, Err("HOME is not set".into()));
+        assert_eq!(failed.accounts, ["louis", "lystriq"]);
+    }
+
+    #[test]
+    fn filter_keeps_matching_rows_in_list_order() {
+        let mut sessions = vec![session("louis", "boss-fight", false), session("lystriq", "api", false)];
+        sessions.push(session("louis", "api", false));
+        let view = apply(&ListView::default(), Ok((snapshot(sessions), HashMap::new())));
+        assert_eq!(titles(&filter(&view, "")), ["boss-fight", "api", "api"]);
+        assert_eq!(titles(&filter(&view, "API")), ["api", "api"]);
+        let both = filter(&view, "api louis");
+        assert_eq!(both.len(), 1);
+        assert_eq!(both[0].account, "louis");
+        assert!(filter(&view, "zzz").is_empty());
+    }
 }

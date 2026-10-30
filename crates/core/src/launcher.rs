@@ -20,6 +20,15 @@ pub fn expand_home(path: &str, home: &Path) -> PathBuf {
     }
 }
 
+/// The directory typed in a new-session form, `~` expanded; refused if it does not exist.
+pub fn resolve_directory(text: &str, home: &Path) -> Result<PathBuf, String> {
+    let directory = expand_home(text.trim(), home);
+    if !directory.is_dir() {
+        return Err(format!("no such directory: {}", directory.display()));
+    }
+    Ok(directory)
+}
+
 /// Reads the short id from `backgrounded · 378ce649 · name (…)`.
 pub fn parse_backgrounded_id(output: &str) -> Option<String> {
     output.lines().find_map(|line| {
@@ -86,5 +95,13 @@ mod tests {
         assert_eq!(expand_home("~", home), PathBuf::from("/home/u"));
         assert_eq!(expand_home("~other/x", home), PathBuf::from("~other/x"));
         assert_eq!(expand_home("/tmp", home), PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn typed_directory_is_expanded_and_must_exist() {
+        let home = std::env::temp_dir();
+        assert_eq!(resolve_directory(" ~ ", &home), Ok(home.clone()));
+        let missing = resolve_directory("~/no-such-dir-claude-sessions", &home);
+        assert_eq!(missing, Err(format!("no such directory: {}", home.join("no-such-dir-claude-sessions").display())));
     }
 }
