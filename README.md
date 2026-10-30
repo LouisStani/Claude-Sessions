@@ -132,6 +132,15 @@ cargo run -p claude-sessions-desktop
 
 On Linux the desktop interface needs WebKitGTK 4.1 (`webkit2gtk-4.1` on Arch).
 
+The icon is drawn in `crates/desktop/icons/icon.svg`. After changing it, regenerate the PNG and the Windows ICO (needs librsvg and ImageMagick):
+
+```sh
+cd crates/desktop/icons
+rsvg-convert -w 256 -h 256 icon.svg -o icon.png
+for s in 16 24 32 48 64 256; do rsvg-convert -w $s -h $s icon.svg -o /tmp/icon-$s.png; done
+magick /tmp/icon-{16,24,32,48,64,256}.png icon.ico
+```
+
 The tests never start Claude Code and never touch your accounts. CI runs clippy and the tests on Linux, macOS and Windows at every push.
 
 ## License
