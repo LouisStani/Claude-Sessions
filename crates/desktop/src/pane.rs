@@ -181,7 +181,12 @@ mod tests {
     fn windows_output_arrives_then_the_end_is_reported() {
         let command =
             AttachCommand { program: "cmd".into(), args: vec!["/C".into(), "echo ready".into()], env: Vec::new() };
-        let (_pane, seen) = open(&command, 80, 24);
+        let (mut pane, seen) = open(&command, 80, 24);
+        // ConPTY first asks where the cursor is and holds the output until a terminal
+        // answers; in the app, xterm.js answers by itself.
+        let query = wait_for(&seen, "\x1b[6n");
+        assert!(query.contains("\x1b[6n"), "{query:?}");
+        pane.write(b"\x1b[1;1R").expect("write");
         let text = wait_for(&seen, "ready");
         assert!(text.contains("ready"), "{text:?}");
         assert!(exited(&seen));
