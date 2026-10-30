@@ -555,33 +555,61 @@ function onPickerKey(event) {
   }
 }
 
-// Keys the app keeps for itself, like `command_for` in the terminal interface. `code` does
-// not depend on the keyboard layout.
-function shortcutFor(event) {
-  const ctrl = event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey;
-  const alt = event.altKey && !event.ctrlKey && !event.shiftKey && !event.metaKey;
-  if (ctrl && event.code === "KeyN") return { run: openNewSessionForm };
-  if (ctrl && event.code === "KeyP") return { run: openPicker };
-  const bare = !event.ctrlKey && !event.altKey && !event.shiftKey && !event.metaKey;
-  if (bare && event.code === "F2") return { run: openRenameForm };
-  const digit = /^Digit([1-9])$/.exec(event.code);
-  if (alt && digit) return { run: () => showNumber(Number(digit[1])) };
-  if (alt && event.code === "KeyH") return { run: () => stepSession(-1) };
-  if (alt && event.code === "KeyL") return { run: () => stepSession(1) };
-  if (ctrl && event.code === "KeyH") return { run: () => panes.step(-1) };
-  if (ctrl && event.code === "KeyL") return { run: () => panes.step(1) };
-  const ctrlShift = event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;
-  if (ctrlShift && event.code === "KeyD") return { run: () => panes.split() };
-  if (ctrlShift && event.code === "KeyW") return { run: () => panes.close() };
-  if (ctrlShift && event.code === "KeyT") return { run: openProjectForm };
-  if (ctrlShift && event.code === "KeyX") return { run: closeTab };
-  if (ctrlShift && event.code === "KeyK") return { run: confirmHide };
-  if (ctrlShift && event.code === "KeyM") return { run: openActiveMessages };
-  if (ctrlShift && event.code === "KeyE") return { run: cycleTheme };
-  if (ctrlShift && event.code === "KeyH") return { run: () => panes.tabStep(-1) };
-  if (ctrlShift && event.code === "KeyL") return { run: () => panes.tabStep(1) };
-  if (ctrlShift && digit) return { run: () => panes.goTab(Number(digit[1])) };
-  return null;
+// Keys the app keeps for itself, like `command_for` in the terminal interface; F1 lists
+// them from here, so the help cannot drift. Keys are named as in the trace, "#" being a
+// digit from 1 to 9, which `run` gets.
+const SHORTCUTS = [
+  { group: "sessions", keys: "ctrl+n", help: "start a new session", run: openNewSessionForm },
+  { group: "sessions", keys: "ctrl+p", help: "find a session of this tab", run: openPicker },
+  { group: "sessions", keys: "alt+#", help: "open chip n of the bar", run: (digit) => showNumber(digit) },
+  { group: "sessions", keys: "alt+h", help: "open the previous chip", run: () => stepSession(-1) },
+  { group: "sessions", keys: "alt+l", help: "open the next chip", run: () => stepSession(1) },
+  { group: "sessions", keys: "f2", help: "give a short name", run: openRenameForm },
+  { group: "sessions", keys: "ctrl+shift+k", help: "stop and hide (ctrl+p brings it back)", run: confirmHide },
+  { group: "sessions", keys: "ctrl+shift+m", help: "read its messages", run: openActiveMessages },
+  { group: "panes", keys: "ctrl+shift+d", help: "split the pane", run: () => panes.split() },
+  { group: "panes", keys: "ctrl+shift+w", help: "close the pane (the session keeps running)", run: () => panes.close() },
+  { group: "panes", keys: "ctrl+h", help: "previous pane", run: () => panes.step(-1) },
+  { group: "panes", keys: "ctrl+l", help: "next pane", run: () => panes.step(1) },
+  { group: "tabs", keys: "ctrl+shift+t", help: "add a project", run: openProjectForm },
+  { group: "tabs", keys: "ctrl+shift+x", help: "remove this project (its sessions keep running)", run: closeTab },
+  { group: "tabs", keys: "ctrl+shift+h", help: "previous tab", run: () => panes.tabStep(-1) },
+  { group: "tabs", keys: "ctrl+shift+l", help: "next tab", run: () => panes.tabStep(1) },
+  { group: "tabs", keys: "ctrl+shift+#", help: "tab n", run: (digit) => panes.goTab(digit) },
+  { group: "app", keys: "ctrl+shift+e", help: "next theme", run: cycleTheme },
+  { group: "app", keys: "f1", help: "these shortcuts", run: openHelp },
+];
+const SHORTCUT_KEYS = new Map(SHORTCUTS.map((shortcut) => [shortcut.keys, shortcut]));
+
+// The shortcut of `event`, its digit given to `run`; null for keys the terminal gets.
+export function shortcutFor(event) {
+  if (event.metaKey) return null;
+  const name = keyName(event);
+  const digit = /\+([1-9])$/.exec(name);
+  const shortcut = SHORTCUT_KEYS.get(digit ? name.replace(/[1-9]$/, "#") : name);
+  if (!shortcut) return null;
+  return { ...shortcut, run: () => shortcut.run(digit ? Number(digit[1]) : undefined) };
+}
+
+// "ctrl+shift+#" → "Ctrl+Shift+1..9".
+function shownKeys(keys) {
+  return keys
+    .split("+")
+    .map((part) => (part === "#" ? "1..9" : part.length === 1 ? part.toUpperCase() : part[0].toUpperCase() + part.slice(1)))
+    .join("+");
+}
+
+function openHelp() {
+  const sections = [...new Set(SHORTCUTS.map((shortcut) => shortcut.group))].map((group) => {
+    const section = element("section", "help-group");
+    section.append(element("h2", "", group));
+    for (const shortcut of SHORTCUTS.filter((entry) => entry.group === group)) {
+      section.append(element("kbd", "", shownKeys(shortcut.keys)), element("span", "", shortcut.help));
+    }
+    return section;
+  });
+  document.getElementById("help-list").replaceChildren(...sections);
+  document.getElementById("help").showModal();
 }
 
 // "ctrl+shift+t", "alt+3", "f2": how a shortcut is named in the trace.

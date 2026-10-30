@@ -710,3 +710,37 @@ input:focus, select:focus {
   overflow-wrap: anywhere;
   color: var(--text);
 }
+
+#help {
+  width: 560px;
+}
+
+.help-group {
+  display: grid;
+  grid-template-columns: 16ch 1fr;
+  gap: 4px 16px;
+  align-items: baseline;
+}
+
+.help-group + .help-group {
+  margin-top: 14px;
+}
+
+.help-group h2 {
+  grid-column: 1 / -1;
+  margin: 0 0 2px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+}
+
+.help-group kbd {
+  font-family: var(--font);
+  font-weight: 700;
+  color: var(--waiting);
+}
+
+.help-group span {
+  color: var(--muted);
+}
