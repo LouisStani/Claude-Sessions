@@ -32,7 +32,7 @@ pub struct SessionRow {
     pub short_id: Option<String>,
     pub state: &'static str,
     pub isolated: bool,
-    /// The tab the session belongs to: its project's, else "all". Set by `assign`.
+    /// The tab the session belongs to: its project's, else "other". Set by `assign`.
     pub tab: PaneId,
     pub unread: usize,
     /// Claude finished a turn here and it has not been looked at since.
@@ -189,9 +189,9 @@ pub fn known_directories(projects: &[Project], view: &ListView, home: &Path) -> 
     known
 }
 
-/// The rows Ctrl+P offers for `query`, in bar order.
-pub fn filter(view: &ListView, query: &str) -> Vec<SessionRow> {
-    view.sessions.iter().filter(|row| matches_with(&row.info, &row.label, query)).cloned().collect()
+/// The rows Ctrl+P offers for `query`: those of `tab` only, hidden ones last, in bar order.
+pub fn filter(view: &ListView, tab: PaneId, query: &str) -> Vec<SessionRow> {
+    view.sessions.iter().filter(|row| row.tab == tab && matches_with(&row.info, &row.label, query)).cloned().collect()
 }
 
 #[cfg(test)]
@@ -287,12 +287,12 @@ mod tests {
         let mut sessions = vec![session("louis", "boss-fight", false), session("lystriq", "api", false)];
         sessions.push(session("louis", "api", false));
         let view = apply(&ListView::default(), Ok((snapshot(sessions), HashMap::new())), None);
-        assert_eq!(titles(&filter(&view, "")), ["boss-fight", "api", "api"]);
-        assert_eq!(titles(&filter(&view, "API")), ["api", "api"]);
-        let both = filter(&view, "api louis");
+        assert_eq!(titles(&filter(&view, 0, "")), ["boss-fight", "api", "api"]);
+        assert_eq!(titles(&filter(&view, 0, "API")), ["api", "api"]);
+        let both = filter(&view, 0, "api louis");
         assert_eq!(both.len(), 1);
         assert_eq!(both[0].account, "louis");
-        assert!(filter(&view, "zzz").is_empty());
+        assert!(filter(&view, 0, "zzz").is_empty());
     }
 
     fn in_state(account: &str, name: &str, state: SessionState) -> SessionInfo {
@@ -427,14 +427,31 @@ mod tests {
         let mut view = refresh(&ListView::default(), sessions, None);
         let mut prefs = Prefs::new();
         crate::prefs::set_label(&mut prefs, "louis-api", "backend");
-        assign(&mut view, &Tabs::default(), &prefs);
+        let tabs = Tabs::default();
+        assign(&mut view, &tabs, &prefs);
         let label_of = |title: &str| view.sessions.iter().find(|row| row.title == title).map(|row| row.label.clone());
         assert_eq!(label_of("api").as_deref(), Some("backend"));
         let given_of = |title: &str| view.sessions.iter().find(|row| row.title == title).and_then(|row| row.given.clone());
         assert_eq!(given_of("api").as_deref(), Some("backend"));
         assert_eq!(given_of("Router CEO et flux de données Overview"), None);
         assert_eq!(label_of("Router CEO et flux de données Overview").as_deref(), Some("Router CEO et flux de…"));
-        assert_eq!(titles(&filter(&view, "backend")), ["api"]);
+        assert_eq!(titles(&filter(&view, tabs.active_tab(), "backend")), ["api"]);
+    }
+
+    #[test]
+    fn ctrl_p_only_offers_the_sessions_of_the_visible_tab() {
+        let mut tabs = Tabs::default();
+        let other = tabs.active_tab();
+        tabs.add_project(Project::new("/home/u/Pro".into())).unwrap();
+        let pro = tabs.active_tab();
+        let sessions = vec![
+            SessionInfo { cwd: "/home/u/Pro/api".into(), ..session("louis", "api-pro", false) },
+            SessionInfo { cwd: "/home/u/perso".into(), ..session("louis", "api-perso", false) },
+        ];
+        let mut view = refresh(&ListView::default(), sessions, None);
+        assign(&mut view, &tabs, &Prefs::new());
+        assert_eq!(titles(&filter(&view, pro, "api")), ["api-pro"]);
+        assert_eq!(titles(&filter(&view, other, "api")), ["api-perso"]);
     }
 
     #[test]
@@ -447,10 +464,11 @@ mod tests {
         let mut view = refresh(&ListView::default(), sessions, None);
         let mut prefs = Prefs::new();
         crate::prefs::set_hidden(&mut prefs, "louis-old", true);
-        assign(&mut view, &Tabs::default(), &prefs);
+        let tabs = Tabs::default();
+        assign(&mut view, &tabs, &prefs);
         assert_eq!(titles(&view.sessions), ["asleep", "other", "old"]);
         assert!(view.sessions[2].hidden);
-        assert_eq!(titles(&filter(&view, "old")), ["old"]);
+        assert_eq!(titles(&filter(&view, tabs.active_tab(), "old")), ["old"]);
         let home = Path::new("/home/u");
         assert!(!known_directories(&[], &view, home).contains(&tilde(Path::new("/home/u/old-work"), home)));
     }

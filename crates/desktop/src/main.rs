@@ -66,8 +66,8 @@ fn current_list(shared: State<'_, Shared>) -> ListView {
 }
 
 #[tauri::command]
-fn filter_sessions(shared: State<'_, Shared>, query: String) -> Vec<SessionRow> {
-    view::filter(&shared.view.lock().unwrap_or_else(PoisonError::into_inner), &query)
+fn filter_sessions(shared: State<'_, Shared>, tab: PaneId, query: String) -> Vec<SessionRow> {
+    view::filter(&shared.view.lock().unwrap_or_else(PoisonError::into_inner), tab, &query)
 }
 
 #[derive(Serialize)]
@@ -278,7 +278,7 @@ fn close_tab(app: AppHandle, shared: State<'_, Shared>) -> Result<Tabs, String> 
     let mut workspace = shared.workspace();
     let mut next = workspace.tabs.clone();
     let Some(panes) = next.close_tab() else {
-        return Err("the all tab stays".into());
+        return Err("the other tab stays".into());
     };
     save_projects(&shared, &next)?;
     workspace.tabs = next;

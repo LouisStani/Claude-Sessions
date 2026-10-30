@@ -129,7 +129,7 @@ export class Panes {
     this.render(await invoke("tabs"));
   }
 
-  // The visible tab: its `project` is null for "all".
+  // The visible tab: its `project` is null for "other".
   activeTab() {
     return this.state.tabs.find((tab) => tab.id === this.state.active);
   }
@@ -226,15 +226,15 @@ export class Panes {
     }
   }
 
-  // "n name" per tab; a project tab carries the dot of its most urgent session.
+  // "n name" per tab, which carries the dot of its most urgent session.
   renderBar() {
     if (this.state === null) return;
     this.bar.replaceChildren(
       ...this.state.tabs.map((tab, index) => {
         const button = element("button", "tab");
-        button.append(element("span", "pos", `${index + 1}`), element("span", "tab-name", tab.project ? tab.project.name : "all"));
-        button.title = tab.project ? tab.project.directory : "every session";
-        const mark = tab.project ? this.markOf(tab.id) : null;
+        button.append(element("span", "pos", `${index + 1}`), element("span", "tab-name", tab.project ? tab.project.name : "other"));
+        button.title = tab.project ? tab.project.directory : "sessions of no project";
+        const mark = this.markOf(tab.id);
         if (mark) {
           button.classList.add(mark);
           button.append(element("span", "dot", mark === "finished" ? "✓" : ""));

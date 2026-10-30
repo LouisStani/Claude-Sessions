@@ -50,16 +50,15 @@ function directoryField(formId) {
   return new DirectoryField(form.elements.directory, form.querySelector(".suggestions"));
 }
 
-// The sessions of the bar: those of the visible project, or every one in "all". Rust sorts
-// them, most urgent first.
+// The sessions of the bar: those of the visible tab, its project's or, in "other", those of
+// no project. Rust sorts them, most urgent first.
 function barSessions() {
   if (panes.state === null) return [];
   const tab = panes.activeTab();
-  const shown = lastView.sessions.filter((session) => !session.hidden);
-  return tab.project ? shown.filter((session) => session.tab === tab.id) : shown;
+  return lastView.sessions.filter((session) => !session.hidden && session.tab === tab.id);
 }
 
-// The dot of a project tab: its most urgent session, if that one needs you.
+// The dot of a tab: its most urgent session, if that one needs you.
 function markOf(tabId) {
   const session = lastView.sessions.find((row) => row.tab === tabId && !row.hidden);
   if (!session) return null;
@@ -185,7 +184,7 @@ function titleOf(key) {
   return session ? session.label : key.short_id;
 }
 
-// A session opens in the tab of its project: "all" only shows sessions of no project. A
+// A session opens in the tab of its project, "other" for no project. A
 // session just started is not in the list yet: it opens where it was started.
 async function openSession(session) {
   if (!session.short_id) {
@@ -327,7 +326,7 @@ function renderPicker() {
 async function filterPicker() {
   // Answers can come back out of order: only the last query counts.
   const query = ++picker.query;
-  const rows = await invoke("filter_sessions", { query: document.getElementById("picker-query").value });
+  const rows = await invoke("filter_sessions", { tab: panes.state.active, query: document.getElementById("picker-query").value });
   if (query !== picker.query) return;
   picker.rows = rows;
   picker.selected = 0;

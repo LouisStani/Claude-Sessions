@@ -1,4 +1,4 @@
-//! The tabs of the window, each with its own tree of panes: "all" first, then one per
+//! The tabs of the window, each with its own tree of panes: "other" first, then one per
 //! project. Hidden tabs keep their sessions attached; pane ids are unique across tabs.
 
 use std::path::Path;
@@ -12,7 +12,7 @@ use crate::projects::{self, Project};
 pub struct Tab {
     id: PaneId,
     layout: Layout,
-    /// None for "all", whose bar shows every session.
+    /// None for "other", whose bar shows the sessions of no project.
     project: Option<Project>,
 }
 
@@ -33,7 +33,7 @@ impl Default for Tabs {
 }
 
 impl Tabs {
-    /// "all", then a tab per project, "all" active.
+    /// "other", then a tab per project, "other" active.
     pub fn with_projects(projects: Vec<Project>) -> Self {
         let mut tabs = Self::default();
         for project in projects {
@@ -90,13 +90,13 @@ impl Tabs {
         self.tabs.iter().filter_map(|tab| tab.project.clone()).collect()
     }
 
-    /// The tab a session working in `directory` belongs to: its project's, else "all".
+    /// The tab a session working in `directory` belongs to: its project's, else "other".
     pub fn owner_tab(&self, directory: &Path) -> PaneId {
         let projects = self.tabs.iter().filter_map(|tab| tab.project.as_ref().map(|project| (tab.id, project)));
         projects::owner(directory, projects).unwrap_or(self.tabs[0].id)
     }
 
-    /// Closes the active project tab and gives the focus to the one before it. "all" stays:
+    /// Closes the active project tab and gives the focus to the one before it. "other" stays:
     /// returns the panes to detach, or None.
     pub fn close_tab(&mut self) -> Option<Vec<PaneId>> {
         let index = self.index();
@@ -201,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn the_all_tab_cannot_be_closed() {
+    fn the_other_tab_cannot_be_closed() {
         let mut tabs = Tabs::default();
         assert_eq!(tabs.close_tab(), None);
         add(&mut tabs);
@@ -234,7 +234,7 @@ mod tests {
     }
 
     #[test]
-    fn projects_come_back_after_all_in_order_with_all_active() {
+    fn projects_come_back_after_other_in_order_with_other_active() {
         let projects = vec![Project::new("/home/u/blog".into()), Project::new("/home/u/api".into())];
         let tabs = Tabs::with_projects(projects.clone());
         assert_eq!(tabs.tabs[0].project, None);
@@ -251,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn a_session_belongs_to_its_project_tab_else_to_all() {
+    fn a_session_belongs_to_its_project_tab_else_to_other() {
         let mut tabs = Tabs::default();
         let all = tabs.active;
         tabs.add_project(Project::new("/home/u/api".into())).unwrap();
