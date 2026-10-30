@@ -62,6 +62,8 @@ class PaneView {
     // A session can end before `open_session` has returned its generation.
     this.lastEnded = null;
     this.used = false;
+    // Between opening a session and its first output: the pane says so instead of staying blank.
+    this.waiting = false;
     this.element = element("div", "pane");
     this.title = element("span", "head-title");
     this.account = element("span", "head-account");
@@ -104,7 +106,21 @@ class PaneView {
     invoke(command, { pane: this.id, ...args }).catch((error) => console.error(error));
   }
 
+  connecting(title) {
+    this.waiting = true;
+    setText(this.placeholder, `connecting to ${title}…`);
+    this.placeholder.hidden = false;
+  }
+
+  connected() {
+    if (!this.waiting) return;
+    this.waiting = false;
+    this.placeholder.hidden = true;
+    setText(this.placeholder, "select a session");
+  }
+
   showEnd() {
+    this.connected();
     this.current.ended = true;
     this.terminal.write("\r\n\x1b[2m[session closed]\x1b[0m\r\n");
   }
@@ -215,7 +231,9 @@ export class Panes {
     for (const leaf of leaves(tab.layout.root)) {
       const view = this.view(leaf.id);
       view.element.classList.toggle("active", leaf.id === tab.layout.active);
-      view.placeholder.hidden = leaf.session !== null || view.used;
+      // Emptied after its session opened (hidden, say): nothing is coming any more.
+      if (leaf.session === null && view.current && view.current.generation !== null) view.connected();
+      view.placeholder.hidden = !view.waiting && (leaf.session !== null || view.used);
     }
     built.page.hidden = tab.id !== this.state.active;
     return built.page;
@@ -369,11 +387,12 @@ export class Panes {
     let shown = false;
     output.onmessage = (bytes) => {
       if (view.current !== opening) return;
+      view.connected();
       view.terminal.write(new Uint8Array(bytes), shown ? undefined : () => mark("first output shown", start));
       shown = true;
     };
-    view.placeholder.hidden = true;
     view.terminal.reset();
+    view.connecting(this.titleOf(session));
     let opened;
     try {
       opened = await invoke("open_session", { ...request, output });
@@ -384,7 +403,10 @@ export class Panes {
       return;
     }
     // Null: another pane showed it already (this page had not seen it yet) and has the focus.
-    if (opened.generation === null && view.current === opening) view.current = null;
+    if (opened.generation === null && view.current === opening) {
+      view.current = null;
+      view.connected();
+    }
     opening.generation = opened.generation;
     if (view.current === opening && view.lastEnded === opening.generation) view.showEnd();
     this.render(opened.tabs);
