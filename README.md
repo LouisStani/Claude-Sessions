@@ -1,6 +1,6 @@
 # claude-sessions
 
-Several Claude Code sessions, across several accounts, side by side in one terminal. Sessions can leave each other short messages.
+Several Claude Code sessions, across several accounts, side by side in one desktop window, or in one terminal. Sessions can leave each other short messages.
 
 claude-sessions is the companion of [claude-accounts](https://github.com/LouisStani/Claude-Accounts). claude-accounts runs each account with its own login and a shared setup. claude-sessions shows the sessions of all those accounts in one place.
 
@@ -20,6 +20,8 @@ claude-sessions is the companion of [claude-accounts](https://github.com/LouisSt
 - Starts new background sessions on the account and in the directory you choose.
 - Lets sessions send each other messages through a small MCP server, across accounts.
 
+There are two interfaces. The desktop app (`claude-sessions-desktop`) is the main one: projects as tabs, short names, hidden sessions, messages and progress lines, themes, and every new feature. The terminal interface (`claude-sessions`) stays as it is, for machines without a display (over SSH, say); it gets no new features, but it is still built and tested, and its binary runs the MCP server for messages.
+
 Closing claude-sessions closes nothing: the sessions are Claude Code background sessions and keep running. Open claude-sessions again and they are still there.
 
 ## Requirements
@@ -36,7 +38,7 @@ git clone https://github.com/LouisStani/Claude-Sessions.git claude-sessions
 cargo install --locked --path claude-sessions/crates/tui
 ```
 
-The binary goes to `~/.cargo/bin`. Make sure it is on your `PATH`.
+The binary goes to `~/.cargo/bin`. Make sure it is on your `PATH`. Install it even if you only use the desktop app: it runs the MCP server for messages.
 
 The desktop app installs the same way:
 
