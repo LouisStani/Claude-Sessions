@@ -5,6 +5,7 @@ const { listen } = window.__TAURI__.event;
 
 let lastView = { loaded: false, accounts: [], sessions: [], errors: [] };
 const picker = { rows: [], selected: 0, query: 0 };
+const status = { notice: "", timer: null };
 
 function element(tag, className, text) {
   const node = document.createElement(tag);
@@ -17,8 +18,30 @@ function elsewhere(session) {
   return `"${session.title}" runs in another terminal: it cannot be opened here`;
 }
 
+// A notice goes after 8 s. Errors of the list come first and stay as long as they last.
 function setStatus(text) {
-  document.getElementById("status").textContent = text;
+  clearTimeout(status.timer);
+  status.notice = text;
+  if (text) status.timer = setTimeout(() => setStatus(""), 8000);
+  renderStatus();
+}
+
+// The right end of the bar: an error, a notice, or the name of the app.
+function renderStatus() {
+  const node = document.getElementById("status");
+  const errors = lastView.errors.join(" · ");
+  const text = errors || status.notice;
+  node.className = errors ? "error" : text ? "notice" : "";
+  node.title = text;
+  if (text) node.replaceChildren(element("span", "status-text", text));
+  else node.replaceChildren("claude-sessions", element("span", "cursor"));
+}
+
+// The state a chip shows: its color and the shape of its dot.
+function chipState(session) {
+  if (session.finished) return "finished";
+  if (!session.short_id) return "elsewhere";
+  return session.state;
 }
 
 function sessionItem(session) {
@@ -34,29 +57,79 @@ function sessionItem(session) {
   return item;
 }
 
-function listItem(session) {
-  const item = sessionItem(session);
-  if (session.short_id) {
-    item.classList.add("openable");
-    if (panes.shows(session)) item.classList.add("open");
-    item.addEventListener("click", () => openSession(session));
-  } else {
-    item.title = elsewhere(session);
-  }
+function chip(session) {
+  const item = element("li", `chip ${chipState(session)}`);
+  item.append(element("span", "pos", session.number ? `${session.number}` : ""));
+  item.append(element("span", "dot", session.finished ? "✓" : ""));
+  item.append(element("span", "chip-title", session.title));
+  if (session.unread > 0) item.append(element("span", "badge", `${session.unread}`));
+  if (panes.shows(session)) item.classList.add("open");
+  item.addEventListener("click", () => openSession(session));
+  item.addEventListener("mouseenter", () => showTip(session, item));
+  item.addEventListener("mouseleave", hideTip);
   return item;
+}
+
+function showTip(session, item) {
+  const tip = document.getElementById("tip");
+  const state = [session.finished ? "done" : session.state];
+  if (session.isolated) state.push("isolated");
+  const head = element("div");
+  head.append(element("b", "", session.title), element("span", `tip-state ${chipState(session)}`, state.join(" · ")));
+  const unread = session.unread > 0 ? ` · ${session.unread} unread` : "";
+  tip.replaceChildren(
+    head,
+    element("div", "", `${session.account} · ${session.directory}`),
+    element("div", "", `${session.short_id ?? "another terminal"}${unread}`),
+  );
+  // Shown before it is placed: a hidden element has no width.
+  tip.hidden = false;
+  const box = item.getBoundingClientRect();
+  tip.style.left = `${Math.max(Math.min(box.left, window.innerWidth - tip.offsetWidth - 8), 8)}px`;
+  tip.style.top = `${box.bottom + 6}px`;
+}
+
+function hideTip() {
+  document.getElementById("tip").hidden = true;
+}
+
+// Chips that do not fit are hidden from the end, where the sessions that need you least
+// are; "+N" opens Ctrl+P, which has them all.
+function fitChips() {
+  const chips = document.getElementById("chips");
+  const more = chips.querySelector(".more");
+  if (!more) return;
+  const items = [...chips.children].filter((item) => item !== more);
+  for (const item of items) item.hidden = false;
+  more.hidden = true;
+  let hidden = 0;
+  while (chips.scrollWidth > chips.clientWidth && hidden < items.length) {
+    hidden += 1;
+    items[items.length - hidden].hidden = true;
+    more.hidden = false;
+    more.textContent = `+${hidden}`;
+  }
+}
+
+function renderChips(view) {
+  const chips = document.getElementById("chips");
+  hideTip();
+  if (!view.loaded) {
+    chips.replaceChildren(element("li", "chip-note", "loading…"));
+  } else if (view.sessions.length === 0) {
+    chips.replaceChildren(element("li", "chip-note", "no sessions · ctrl+n starts one"));
+  } else {
+    const more = element("li", "chip more");
+    more.addEventListener("click", openPicker);
+    chips.replaceChildren(...view.sessions.map(chip), more);
+  }
+  fitChips();
 }
 
 function render(view) {
   lastView = view;
-  const list = document.getElementById("sessions");
-  if (!view.loaded) {
-    list.replaceChildren(element("li", "muted", "loading…"));
-  } else if (view.sessions.length === 0) {
-    list.replaceChildren(element("li", "muted", "no sessions"));
-  } else {
-    list.replaceChildren(...view.sessions.map(listItem));
-  }
-  document.getElementById("errors").replaceChildren(...view.errors.map((error) => element("li", "error", error)));
+  renderChips(view);
+  renderStatus();
   panes.renderBar();
   panes.decorate();
 }
@@ -221,6 +294,7 @@ const panes = new Panes(document.getElementById("panes"), document.getElementByI
 });
 
 document.addEventListener("keydown", onKey);
+new ResizeObserver(fitChips).observe(document.getElementById("chips"));
 document.getElementById("new-form").addEventListener("submit", startNewSession);
 document.getElementById("picker-query").addEventListener("input", filterPicker);
 document.getElementById("picker-query").addEventListener("keydown", onPickerKey);

@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::layout::SessionKey;
 
-/// Only the first nine sessions get a number, like Alt+1..9 in the terminal.
+/// Only the first nine sessions of the bar get a number: Alt+1..9.
 const NUMBERED: usize = 9;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -15,6 +15,7 @@ pub struct SessionRow {
     pub number: Option<usize>,
     pub title: String,
     pub account: String,
+    pub directory: String,
     /// Only background sessions have one, and only they can be opened here.
     pub short_id: Option<String>,
     pub state: &'static str,
@@ -25,6 +26,9 @@ pub struct SessionRow {
     /// Kept for Ctrl+P, which searches the same fields as the terminal picker.
     #[serde(skip)]
     pub info: SessionInfo,
+    /// Place in the snapshot, which orders sessions of the same rank.
+    #[serde(skip)]
+    position: usize,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
@@ -54,17 +58,47 @@ fn finished(previous: &ListView, session: &SessionInfo, watched: Option<&Session
         .is_some_and(|row| row.finished || row.info.state == SessionState::Working)
 }
 
-fn row(index: usize, session: &SessionInfo, unread: usize, finished: bool) -> SessionRow {
+fn row(position: usize, session: &SessionInfo, unread: usize, finished: bool) -> SessionRow {
     SessionRow {
-        number: (index < NUMBERED).then_some(index + 1),
+        number: None,
         title: session.title(),
         account: session.account.clone(),
+        directory: session.cwd.clone(),
         short_id: session.short_id.clone(),
         state: session.state.label(),
         isolated: session.isolated,
         unread,
         finished,
         info: session.clone(),
+        position,
+    }
+}
+
+/// Where a session goes in the bar: what needs you first, then what runs, then what sleeps.
+/// Sessions running in another terminal cannot be opened here: always last.
+fn rank(row: &SessionRow) -> u8 {
+    if row.short_id.is_none() {
+        return 5;
+    }
+    if row.unread > 0 {
+        return 0;
+    }
+    if row.finished {
+        return 1;
+    }
+    match row.info.state {
+        SessionState::Waiting => 2,
+        SessionState::Working => 3,
+        SessionState::Paused => 4,
+        SessionState::Elsewhere => 5,
+    }
+}
+
+/// Sorts the rows by `rank`, in snapshot order within a rank, and numbers them.
+fn order(sessions: &mut [SessionRow]) {
+    sessions.sort_by_key(|row| (rank(row), row.position));
+    for (index, row) in sessions.iter_mut().enumerate() {
+        row.number = (index < NUMBERED).then_some(index + 1);
     }
 }
 
@@ -72,20 +106,19 @@ fn row(index: usize, session: &SessionInfo, unread: usize, finished: bool) -> Se
 /// `watched` is the session in the active pane of the visible tab.
 pub fn apply(previous: &ListView, update: Update, watched: Option<&SessionKey>) -> ListView {
     match update {
-        Ok((snapshot, unread)) => ListView {
-            loaded: true,
-            accounts: snapshot.accounts,
-            sessions: snapshot
+        Ok((snapshot, unread)) => {
+            let mut sessions: Vec<SessionRow> = snapshot
                 .sessions
                 .iter()
                 .enumerate()
-                .map(|(index, session)| {
+                .map(|(position, session)| {
                     let unread = unread.get(&session.session_id).copied().unwrap_or(0);
-                    row(index, session, unread, finished(previous, session, watched))
+                    row(position, session, unread, finished(previous, session, watched))
                 })
-                .collect(),
-            errors: snapshot.errors,
-        },
+                .collect();
+            order(&mut sessions);
+            ListView { loaded: true, accounts: snapshot.accounts, sessions, errors: snapshot.errors }
+        }
         Err(error) => ListView {
             loaded: previous.loaded,
             accounts: previous.accounts.clone(),
@@ -102,10 +135,13 @@ pub fn seen(view: &mut ListView, key: &SessionKey) -> bool {
         row.finished = false;
         changed = true;
     }
+    if changed {
+        order(&mut view.sessions);
+    }
     changed
 }
 
-/// The rows Ctrl+P offers for `query`, in list order.
+/// The rows Ctrl+P offers for `query`, in bar order.
 pub fn filter(view: &ListView, query: &str) -> Vec<SessionRow> {
     view.sessions.iter().filter(|row| matches(&row.info, query)).cloned().collect()
 }
@@ -134,6 +170,10 @@ mod tests {
         Snapshot { sessions, ..Snapshot::default() }
     }
 
+    fn unread_of(view: &ListView, title: &str) -> usize {
+        view.sessions.iter().find(|row| row.title == title).map(|row| row.unread).unwrap()
+    }
+
     fn titles(rows: &[SessionRow]) -> Vec<&str> {
         rows.iter().map(|row| row.title.as_str()).collect()
     }
@@ -155,15 +195,16 @@ mod tests {
         let sessions = vec![session("louis", "a", false), session("lystriq", "b", false)];
         let unread = HashMap::from([("lystriq-b".to_string(), 3)]);
         let view = apply(&ListView::default(), Ok((snapshot(sessions), unread)), None);
-        assert_eq!(view.sessions[0].unread, 0);
-        assert_eq!(view.sessions[1].unread, 3);
+        assert_eq!(unread_of(&view, "a"), 0);
+        assert_eq!(unread_of(&view, "b"), 3);
     }
 
     #[test]
-    fn rows_carry_account_id_state_and_isolation() {
+    fn rows_carry_account_directory_id_state_and_isolation() {
         let sessions = vec![session("pro", "x", true)];
         let view = apply(&ListView::default(), Ok((snapshot(sessions), HashMap::new())), None);
         assert_eq!(view.sessions[0].account, "pro");
+        assert_eq!(view.sessions[0].directory, "/home/u/Dev");
         assert_eq!(view.sessions[0].short_id.as_deref(), Some("abc"));
         assert_eq!(view.sessions[0].state, "waiting");
         assert!(view.sessions[0].isolated);
@@ -252,7 +293,8 @@ mod tests {
         let working = refresh(&ListView::default(), working, None);
         let waiting = vec![in_state("louis", "a", SessionState::Waiting), in_state("louis", "b", SessionState::Waiting)];
         let done = refresh(&working, waiting, Some(&key("louis", "a")));
-        assert_eq!(marks(&done), [false, true]);
+        assert_eq!(titles(&done.sessions), ["b", "a"]);
+        assert_eq!(marks(&done), [true, false]);
     }
 
     #[test]
@@ -264,6 +306,63 @@ mod tests {
         assert!(seen(&mut done, &key("louis", "a")));
         assert_eq!(marks(&done), [false]);
         assert!(!seen(&mut done, &key("louis", "a")), "nothing left to remove");
+    }
+
+    fn numbers(view: &ListView) -> Vec<Option<usize>> {
+        view.sessions.iter().map(|row| row.number).collect()
+    }
+
+    fn elsewhere(account: &str, name: &str) -> SessionInfo {
+        SessionInfo { short_id: None, ..in_state(account, name, SessionState::Elsewhere) }
+    }
+
+    #[test]
+    fn the_bar_puts_what_needs_you_first() {
+        let before = vec![in_state("louis", "done", SessionState::Working)];
+        let previous = refresh(&ListView::default(), before, None);
+        let sessions = vec![
+            elsewhere("louis", "other-terminal"),
+            in_state("louis", "asleep", SessionState::Paused),
+            in_state("louis", "busy", SessionState::Working),
+            in_state("louis", "waits", SessionState::Waiting),
+            in_state("louis", "done", SessionState::Waiting),
+            in_state("louis", "mail", SessionState::Working),
+        ];
+        let unread = HashMap::from([("louis-mail".to_string(), 1)]);
+        let view = apply(&previous, Ok((snapshot(sessions), unread)), None);
+        assert_eq!(titles(&view.sessions), ["mail", "done", "waits", "busy", "asleep", "other-terminal"]);
+        assert_eq!(numbers(&view), [Some(1), Some(2), Some(3), Some(4), Some(5), Some(6)]);
+    }
+
+    #[test]
+    fn sessions_of_another_terminal_stay_last_even_with_messages() {
+        let sessions = vec![elsewhere("louis", "other-terminal"), in_state("louis", "asleep", SessionState::Paused)];
+        let unread = HashMap::from([("louis-other-terminal".to_string(), 2)]);
+        let view = apply(&ListView::default(), Ok((snapshot(sessions), unread)), None);
+        assert_eq!(titles(&view.sessions), ["asleep", "other-terminal"]);
+    }
+
+    #[test]
+    fn sessions_of_the_same_rank_keep_the_snapshot_order() {
+        let states = [SessionState::Paused, SessionState::Waiting];
+        let sessions = (0..40).map(|i| in_state("louis", &format!("s{i:02}"), states[i % 2])).collect();
+        let view = refresh(&ListView::default(), sessions, None);
+        let waiting: Vec<String> = (0..40).filter(|i| i % 2 == 1).map(|i| format!("s{i:02}")).collect();
+        let paused: Vec<String> = (0..40).filter(|i| i % 2 == 0).map(|i| format!("s{i:02}")).collect();
+        assert_eq!(titles(&view.sessions[..20]), waiting);
+        assert_eq!(titles(&view.sessions[20..]), paused);
+    }
+
+    #[test]
+    fn a_session_looked_at_moves_down_with_its_mark() {
+        let working = vec![in_state("louis", "a", SessionState::Waiting), in_state("louis", "b", SessionState::Working)];
+        let working = refresh(&ListView::default(), working, None);
+        let waiting = vec![in_state("louis", "a", SessionState::Waiting), in_state("louis", "b", SessionState::Waiting)];
+        let mut done = refresh(&working, waiting, None);
+        assert_eq!(titles(&done.sessions), ["b", "a"]);
+        assert!(seen(&mut done, &key("louis", "b")));
+        assert_eq!(titles(&done.sessions), ["a", "b"]);
+        assert_eq!(numbers(&done), [Some(1), Some(2)]);
     }
 
     #[test]

@@ -214,7 +214,9 @@ export class Panes {
       ...this.state.tabs.map((tab, index) => {
         const shown = leaves(tab.layout.root).find((leaf) => leaf.id === tab.layout.active);
         const title = shown && shown.session ? this.titleOf(shown.session) : "empty";
-        const button = element("button", "tab", `${index + 1} · ${title}`);
+        // The heads of the panes name the sessions: a tab only shows its number.
+        const button = element("button", "tab", `${index + 1}`);
+        button.title = title;
         button.classList.toggle("active", tab.id === this.state.active);
         button.onclick = () => this.goTab(index + 1);
         return button;

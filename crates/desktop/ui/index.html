@@ -11,16 +11,13 @@
   <script type="module" src="app.js"></script>
 </head>
 <body>
-  <aside class="list">
-    <h1>sessions</h1>
-    <ol id="sessions"></ol>
-    <ul id="errors"></ul>
-    <p id="status"></p>
-  </aside>
-  <section id="workspace">
+  <header id="bar">
     <nav id="tabs"></nav>
-    <main id="panes"></main>
-  </section>
+    <ol id="chips"></ol>
+    <p id="status"></p>
+  </header>
+  <main id="panes"></main>
+  <div id="tip" hidden></div>
   <dialog id="new-session">
     <form id="new-form">
       <h1>new session</h1>
