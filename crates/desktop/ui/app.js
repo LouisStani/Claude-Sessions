@@ -1,5 +1,5 @@
 import { DirectoryField } from "./directories.js";
-import { Panes } from "./panes.js";
+import { Panes, sameSession } from "./panes.js";
 import { mark, startTrace, traced } from "./trace.js";
 
 const { invoke } = window.__TAURI__.core;
@@ -201,6 +201,26 @@ function showNumber(number) {
   const session = barSessions()[number - 1];
   if (!session) {
     setStatus(`no session #${number}`);
+    return;
+  }
+  return openSession(session);
+}
+
+// The session `step` places away from `key` among those that can open here, round the
+// end; from an empty pane, the first or the last. Null when there is nothing else to open.
+export function neighbour(sessions, key, step) {
+  const openable = sessions.filter((session) => session.short_id);
+  const at = key === null ? -1 : openable.findIndex((session) => sameSession(key, session));
+  if (at === -1) return openable.length === 0 ? null : openable[step > 0 ? 0 : openable.length - 1];
+  if (openable.length === 1) return null;
+  return openable[(at + step + openable.length) % openable.length];
+}
+
+// Alt+H / Alt+L: the previous or next chip of the bar, in the active pane.
+function stepSession(step) {
+  const session = neighbour(barSessions(), panes.activeSession(), step);
+  if (!session) {
+    setStatus("no other session here");
     return;
   }
   return openSession(session);
@@ -412,6 +432,8 @@ function shortcutFor(event) {
   if (bare && event.code === "F2") return { run: openRenameForm };
   const digit = /^Digit([1-9])$/.exec(event.code);
   if (alt && digit) return { run: () => showNumber(Number(digit[1])) };
+  if (alt && event.code === "KeyH") return { run: () => stepSession(-1) };
+  if (alt && event.code === "KeyL") return { run: () => stepSession(1) };
   if (ctrl && event.code === "KeyH") return { run: () => panes.step(-1) };
   if (ctrl && event.code === "KeyL") return { run: () => panes.step(1) };
   const ctrlShift = event.ctrlKey && event.shiftKey && !event.altKey && !event.metaKey;

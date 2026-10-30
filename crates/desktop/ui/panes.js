@@ -22,7 +22,7 @@ function shapeOf(node) {
   return node.kind === "leaf" ? node.id : [node.direction, node.ratio, shapeOf(node.first), shapeOf(node.second)];
 }
 
-function sameSession(key, session) {
+export function sameSession(key, session) {
   return key !== null && key.account === session.account && key.short_id === session.short_id;
 }
 
