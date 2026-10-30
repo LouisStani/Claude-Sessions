@@ -1,0 +1,15 @@
+[package]
+name = "claude-sessions-desktop"
+description = "Desktop interface of claude-sessions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+claude-sessions-core = { path = "../core" }
+serde.workspace = true
+tauri = "2.12"
+
+[build-dependencies]
+tauri-build = "2.7"

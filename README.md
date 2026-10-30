@@ -112,12 +112,15 @@ claude-sessions never reads credentials. All account handling goes through claud
 
 ## Development
 
-The workspace has two crates: `crates/core` (accounts, sessions, messages, refresh, shared by every interface) and `crates/tui` (the terminal interface, the `claude-sessions` binary).
+The workspace has three crates: `crates/core` (accounts, sessions, messages, refresh, shared by every interface), `crates/tui` (the terminal interface, the `claude-sessions` binary) and `crates/desktop` (the desktop interface, built with [Tauri](https://tauri.app); for now it only shows the live session list).
 
 ```sh
 cargo test --workspace
 cargo clippy --workspace --all-targets
+cargo run -p claude-sessions-desktop
 ```
+
+On Linux the desktop interface needs WebKitGTK 4.1 (`webkit2gtk-4.1` on Arch).
 
 The tests never start Claude Code and never touch your accounts.
 
