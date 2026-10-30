@@ -80,6 +80,7 @@ function sessionItem(session) {
   if (project) detail.push(project);
   if (session.hidden) detail.push("hidden");
   item.append(title, element("div", "detail", detail.join(" · ")));
+  if (session.progress) item.append(element("div", "detail progress", session.progress));
   return item;
 }
 
@@ -116,6 +117,7 @@ function showTip(session, item) {
     element("div", "", `${session.account} · ${session.directory}`),
     element("div", "", `${session.short_id ?? "another terminal"}${unread}`),
   );
+  if (session.progress) tip.append(element("div", "progress", session.progress));
   // Shown before it is placed: a hidden element has no width.
   tip.hidden = false;
   const box = item.getBoundingClientRect();
@@ -561,6 +563,7 @@ const panes = new Panes(document.getElementById("panes"), document.getElementByI
   titleOf,
   isFinished,
   markOf,
+  progressOf: (key) => rowOf(key)?.progress ?? null,
 });
 
 const sessionDirectory = directoryField("new-form");

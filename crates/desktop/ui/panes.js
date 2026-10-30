@@ -68,8 +68,9 @@ class PaneView {
     this.title = element("span", "head-title");
     this.account = element("span", "head-account");
     this.done = element("span", "head-done", "done");
+    this.progress = element("span", "head-progress");
     const head = element("div", "pane-head");
-    head.append(element("span", "prompt", "~ $"), this.title, this.account, this.done);
+    head.append(element("span", "prompt", "~ $"), this.title, this.account, this.progress, this.done);
     this.screen = element("div", "screen");
     this.placeholder = element("p", "placeholder", "select a session");
     this.element.append(head, this.screen, this.placeholder);
@@ -94,9 +95,11 @@ class PaneView {
   }
 
   // The head names the session shown, and says when it finished a turn not looked at yet.
-  label(key, title, finished) {
+  label(key, title, finished, progress) {
     setText(this.title, key === null ? "empty" : title);
     setText(this.account, key === null ? "" : `· ${key.account}`);
+    setText(this.progress, key === null || !progress ? "" : `· ${progress}`);
+    this.progress.title = progress || "";
     this.done.hidden = !finished;
     this.element.classList.toggle("finished", finished);
   }
@@ -141,7 +144,7 @@ function leaves(node, found = []) {
 }
 
 export class Panes {
-  constructor(container, bar, { keyFilter, onChange, titleOf, isFinished, markOf }) {
+  constructor(container, bar, { keyFilter, onChange, titleOf, isFinished, markOf, progressOf }) {
     this.container = container;
     this.bar = bar;
     this.keyFilter = keyFilter;
@@ -149,6 +152,7 @@ export class Panes {
     this.titleOf = titleOf;
     this.isFinished = isFinished;
     this.markOf = markOf;
+    this.progressOf = progressOf;
     this.state = null;
     this.views = new Map();
     // Tab id → its page and the shape it was built for.
@@ -281,7 +285,7 @@ export class Panes {
     for (const leaf of this.allLeaves()) {
       const key = leaf.session;
       const title = key === null ? "" : this.titleOf(key);
-      this.view(leaf.id).label(key, title, key !== null && this.isFinished(key));
+      this.view(leaf.id).label(key, title, key !== null && this.isFinished(key), key === null ? null : this.progressOf(key));
     }
   }
 

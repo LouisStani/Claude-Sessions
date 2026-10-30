@@ -453,6 +453,24 @@ ol, ul {
   color: var(--faint);
 }
 
+.head-progress {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--faint);
+}
+
+.pane.active .head-progress {
+  color: var(--on-active);
+  opacity: 0.6;
+}
+
+.progress {
+  font-style: italic;
+  color: var(--muted);
+}
+
 .head-done {
   padding: 0 6px;
   border-radius: 6px;

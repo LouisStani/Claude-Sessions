@@ -8,6 +8,8 @@ use std::time::{Duration, Instant};
 use claude_accounts::{Paths, launch, registry};
 use serde::Deserialize;
 
+use crate::progress;
+
 pub(crate) const LAUNCHER: &str = "claude-accounts";
 pub const MIN_LAUNCHER_VERSION: (u32, u32, u32) = (1, 2, 0);
 
@@ -41,6 +43,8 @@ pub struct SessionInfo {
     pub state: SessionState,
     /// Account isolated by `claude-accounts isolate`: kept out of messages.
     pub isolated: bool,
+    /// What the session last said it is doing (see `progress`); background sessions only.
+    pub progress: Option<String>,
 }
 
 impl SessionInfo {
@@ -97,6 +101,7 @@ pub fn parse_agents(account: &str, json: &str) -> serde_json::Result<Vec<Session
             name: raw.name.unwrap_or_default(),
             cwd: raw.cwd.unwrap_or_default(),
             isolated: false,
+            progress: None,
         })
         .collect())
 }
@@ -172,7 +177,11 @@ fn account_sessions(paths: &Paths, account: &str) -> io::Result<Vec<SessionInfo>
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(io::Error::other(format!("claude agents --json: {}", stderr.trim())));
     }
-    parse_agents(account, &String::from_utf8_lossy(&output.stdout)).map_err(io::Error::other)
+    let mut sessions = parse_agents(account, &String::from_utf8_lossy(&output.stdout)).map_err(io::Error::other)?;
+    for session in &mut sessions {
+        session.progress = session.short_id.as_deref().and_then(|short_id| progress::progress(&dir, short_id));
+    }
+    Ok(sessions)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]

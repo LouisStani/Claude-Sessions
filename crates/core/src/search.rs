@@ -25,6 +25,7 @@ mod tests {
             cwd: cwd.into(),
             state: SessionState::Waiting,
             isolated: false,
+            progress: None,
         }
     }
 

@@ -3,6 +3,7 @@ pub mod attach;
 pub mod launcher;
 pub mod mailbox;
 pub mod mcp;
+pub mod progress;
 pub mod refresher;
 pub mod search;
 pub mod watcher;

@@ -30,6 +30,8 @@ pub struct SessionRow {
     pub directory: String,
     /// The full session id, which names its mailbox.
     pub session_id: String,
+    /// What the session last said it is doing, if Claude Code wrote it.
+    pub progress: Option<String>,
     /// Only background sessions have one, and only they can be opened here.
     pub short_id: Option<String>,
     pub state: &'static str,
@@ -83,6 +85,7 @@ fn row(position: usize, session: &SessionInfo, unread: usize, finished: bool) ->
         account: session.account.clone(),
         directory: session.cwd.clone(),
         session_id: session.session_id.clone(),
+        progress: session.progress.clone(),
         short_id: session.short_id.clone(),
         state: session.state.label(),
         isolated: session.isolated,
@@ -214,6 +217,7 @@ mod tests {
             cwd: "/home/u/Dev".into(),
             state: SessionState::Waiting,
             isolated,
+            progress: None,
         }
     }
 

@@ -290,6 +290,7 @@ mod tests {
             cwd: format!("/home/u/{name}"),
             state: SessionState::Waiting,
             isolated: false,
+            progress: None,
         }
     }
 
