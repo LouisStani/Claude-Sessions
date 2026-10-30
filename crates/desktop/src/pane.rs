@@ -2,15 +2,20 @@
 //! moves bytes and sizes.
 
 use std::io::{self, Read, Write};
-use std::thread;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::{self, JoinHandle};
 
 use claude_sessions_core::attach::AttachCommand;
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{Child, ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
+
+/// The pty side kept by the pane; None once the program has ended and the pty is closed.
+type SharedMaster = Arc<Mutex<Option<Box<dyn MasterPty + Send>>>>;
 
 pub struct Pane {
-    master: Box<dyn MasterPty + Send>,
+    master: SharedMaster,
     writer: Box<dyn Write + Send>,
-    child: Box<dyn Child + Send + Sync>,
+    killer: Box<dyn ChildKiller + Send + Sync>,
+    waiter: Option<JoinHandle<()>>,
 }
 
 fn pty_error(error: impl ToString) -> io::Error {
@@ -19,6 +24,13 @@ fn pty_error(error: impl ToString) -> io::Error {
 
 fn size(columns: u16, rows: u16) -> PtySize {
     PtySize { rows, cols: columns, pixel_width: 0, pixel_height: 0 }
+}
+
+/// Waits for the program, then closes the pty. On Windows the output of the pseudo-console
+/// only ends once it is closed; the reader then sees the end after the last bytes.
+fn close_when_done(mut child: Box<dyn Child + Send + Sync>, master: SharedMaster) {
+    let _ = child.wait();
+    master.lock().unwrap_or_else(PoisonError::into_inner).take();
 }
 
 /// Hands every chunk to `on_output`, then calls `on_exit` once the program has gone.
@@ -54,8 +66,14 @@ impl Pane {
         drop(pair.slave);
         let reader = pair.master.try_clone_reader().map_err(pty_error)?;
         let writer = pair.master.take_writer().map_err(pty_error)?;
+        let killer = child.clone_killer();
+        let master: SharedMaster = Arc::new(Mutex::new(Some(pair.master)));
+        let waiter = {
+            let master = Arc::clone(&master);
+            thread::spawn(move || close_when_done(child, master))
+        };
         thread::spawn(move || forward(reader, on_output, on_exit));
-        Ok(Self { master: pair.master, writer, child })
+        Ok(Self { master, writer, killer, waiter: Some(waiter) })
     }
 
     pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
@@ -64,15 +82,20 @@ impl Pane {
     }
 
     pub fn resize(&self, columns: u16, rows: u16) -> io::Result<()> {
-        self.master.resize(size(columns, rows)).map_err(pty_error)
+        let master = self.master.lock().unwrap_or_else(PoisonError::into_inner);
+        let master = master.as_ref().ok_or_else(|| io::Error::other("the session has ended"))?;
+        master.resize(size(columns, rows)).map_err(pty_error)
     }
 }
 
 impl Drop for Pane {
     /// Ends the attaching process only: the background session keeps running in Claude Code.
+    /// Returns once the program is gone and the pty closed.
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        let _ = self.killer.kill();
+        if let Some(waiter) = self.waiter.take() {
+            let _ = waiter.join();
+        }
     }
 }
 
