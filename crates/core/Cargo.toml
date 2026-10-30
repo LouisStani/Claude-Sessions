@@ -1,0 +1,13 @@
+[package]
+name = "claude-sessions-core"
+description = "Accounts, sessions, messages and refresh shared by the claude-sessions interfaces"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+claude-accounts.workspace = true
+notify = "8"
+serde.workspace = true
+serde_json.workspace = true

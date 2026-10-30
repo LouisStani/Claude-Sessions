@@ -1,10 +1,10 @@
+use claude_sessions_core::accounts::SessionInfo;
 use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
-use crate::accounts::SessionInfo;
 use crate::app::{App, Overlay};
 use crate::layout;
 use crate::new_session::{Field, NewSessionForm};

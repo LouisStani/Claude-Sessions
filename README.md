@@ -33,7 +33,7 @@ Closing claude-sessions closes nothing: the sessions are Claude Code background 
 
 ```sh
 git clone https://github.com/LouisStani/Claude-Sessions.git claude-sessions
-cargo install --locked --path claude-sessions
+cargo install --locked --path claude-sessions/crates/tui
 ```
 
 The binary goes to `~/.cargo/bin`. Make sure it is on your `PATH`.
@@ -112,9 +112,11 @@ claude-sessions never reads credentials. All account handling goes through claud
 
 ## Development
 
+The workspace has two crates: `crates/core` (accounts, sessions, messages, refresh, shared by every interface) and `crates/tui` (the terminal interface, the `claude-sessions` binary).
+
 ```sh
-cargo test
-cargo clippy --all-targets
+cargo test --workspace
+cargo clippy --workspace --all-targets
 ```
 
 The tests never start Claude Code and never touch your accounts.

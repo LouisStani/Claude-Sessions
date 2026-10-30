@@ -2,11 +2,9 @@
 //! something, and every `FALLBACK` in case a change was missed.
 
 use std::collections::HashMap;
-use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::Duration;
 
-use crate::AppEvent;
 use crate::accounts::{self, Snapshot};
 use crate::mailbox::{self, Mailbox};
 use crate::watcher::{self, ChangeWatcher, Wake};
@@ -14,6 +12,9 @@ use crate::watcher::{self, ChangeWatcher, Wake};
 const FALLBACK: Duration = Duration::from_secs(30);
 const SETTLE: Duration = Duration::from_millis(300);
 const WITHOUT_WATCHER: Duration = Duration::from_secs(10);
+
+/// The session list with unread message counts by session id, or why it could not be read.
+pub type Update = Result<(Snapshot, HashMap<String, usize>), String>;
 
 struct Refresher {
     watcher: Result<ChangeWatcher, String>,
@@ -70,7 +71,7 @@ impl Refresher {
             .collect()
     }
 
-    fn refresh(&mut self) -> Result<(Snapshot, HashMap<String, usize>), String> {
+    fn refresh(&mut self) -> Update {
         let mut snapshot = accounts::snapshot().map_err(|error| error.to_string())?;
         if let Err(error) = &self.watcher {
             snapshot.errors.push(error.clone());
@@ -92,11 +93,12 @@ impl Refresher {
     }
 }
 
-pub fn spawn(events: Sender<AppEvent>) {
+/// Hands every new list to `publish`; stops once `publish` returns false.
+pub fn spawn(mut publish: impl FnMut(Update) -> bool + Send + 'static) {
     thread::spawn(move || {
         let mut refresher = Refresher::new();
         loop {
-            if events.send(AppEvent::Snapshot(refresher.refresh())).is_err() {
+            if !publish(refresher.refresh()) {
                 return;
             }
             refresher.wait();

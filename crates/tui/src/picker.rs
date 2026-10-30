@@ -1,6 +1,6 @@
+use claude_sessions_core::accounts::SessionInfo;
+use claude_sessions_core::search::matches;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-use crate::accounts::SessionInfo;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
@@ -19,12 +19,6 @@ pub enum PickerOutcome {
 pub struct Picker {
     pub query: String,
     pub selected: usize,
-}
-
-/// Every word of `query` must appear, case-insensitively, in the session's title, account or directory.
-pub fn matches(session: &SessionInfo, query: &str) -> bool {
-    let haystack = format!("{} {} {}", session.title(), session.account, session.cwd).to_lowercase();
-    query.to_lowercase().split_whitespace().all(|word| haystack.contains(word))
 }
 
 impl Picker {
@@ -73,7 +67,7 @@ impl Picker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::accounts::SessionState;
+    use claude_sessions_core::accounts::SessionState;
 
     fn session(account: &str, name: &str, cwd: &str) -> SessionInfo {
         SessionInfo {
@@ -99,14 +93,6 @@ mod tests {
         for c in text.chars() {
             picker.handle_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE), sessions);
         }
-    }
-
-    #[test]
-    fn every_word_must_match_somewhere() {
-        let sessions = sessions();
-        assert!(matches(&sessions[0], "ROB louis"));
-        assert!(matches(&sessions[2], "merkio"));
-        assert!(!matches(&sessions[1], "api louis"));
     }
 
     #[test]

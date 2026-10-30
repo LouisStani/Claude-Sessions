@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
@@ -9,6 +8,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
 use alacritty_terminal::tty::{self, Options, Shell};
+use claude_sessions_core::accounts::LAUNCHER;
 
 use crate::AppEvent;
 
@@ -75,7 +75,7 @@ impl Pane {
         events: Sender<AppEvent>,
     ) -> io::Result<Self> {
         let listener = Listener { key, events };
-        let options = launcher_options(&["run", account, "attach", short_id]);
+        let options = launcher_options(account, short_id);
         let pty = tty::new(&options, size.window_size(), 0)?;
         let term = Term::new(Config::default(), &size, listener.clone());
         let term = Arc::new(FairMutex::new(term));
@@ -103,11 +103,14 @@ impl Pane {
     }
 }
 
-fn launcher_options(args: &[&str]) -> Options {
-    let shell = Shell::new("claude-accounts".into(), args.iter().map(|arg| arg.to_string()).collect());
-    let env = HashMap::from([
-        ("TERM".to_string(), "xterm-256color".to_string()),
-        ("COLORTERM".to_string(), "truecolor".to_string()),
-    ]);
+/// `claude-accounts run <account> attach <short_id>`: claude-accounts sets the account up,
+/// then Claude Code attaches. Claude Code draws in colour only when the terminal says it can.
+fn launcher_options(account: &str, short_id: &str) -> Options {
+    let args = ["run", account, "attach", short_id].map(String::from).to_vec();
+    let shell = Shell::new(LAUNCHER.to_string(), args);
+    let env = [("TERM", "xterm-256color"), ("COLORTERM", "truecolor")]
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value.to_string()))
+        .collect();
     Options { shell: Some(shell), env, ..Options::default() }
 }

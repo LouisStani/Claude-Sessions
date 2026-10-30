@@ -1,18 +1,12 @@
-mod accounts;
 mod app;
 mod keys;
 mod layout;
-mod mailbox;
-mod mcp;
 mod new_session;
 mod pane;
 mod picker;
-mod refresher;
 mod render;
 mod ui;
-mod watcher;
 
-use std::collections::HashMap;
 use std::io::{self, stdout};
 use std::iter;
 use std::path::PathBuf;
@@ -21,12 +15,13 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 
 use alacritty_terminal::event::Event as TermEvent;
+use claude_sessions_core::launcher::Launched;
+use claude_sessions_core::{accounts, mcp, refresher};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, DisableBracketedPaste, EnableBracketedPaste, Event};
 use ratatui::crossterm::execute;
 use ratatui::layout::Rect;
 
-use crate::accounts::Snapshot;
 use crate::app::{App, Flow};
 use crate::pane::PaneKey;
 
@@ -36,8 +31,8 @@ pub enum AppEvent {
     Input(Event),
     InputFailed(io::Error),
     Term(PaneKey, TermEvent),
-    Snapshot(Result<(Snapshot, HashMap<String, usize>), String>),
-    Created(Result<(String, new_session::Launched), String>),
+    Snapshot(refresher::Update),
+    Created(Result<(String, Launched), String>),
 }
 
 fn main() -> ExitCode {
@@ -76,7 +71,8 @@ fn run_loop(terminal: &mut DefaultTerminal, home: PathBuf, start_dir: PathBuf) -
     execute!(stdout(), EnableBracketedPaste)?;
     let (events, inbox) = mpsc::channel();
     spawn_input_reader(events.clone());
-    refresher::spawn(events.clone());
+    let publisher = events.clone();
+    refresher::spawn(move |update| publisher.send(AppEvent::Snapshot(update)).is_ok());
     let size = terminal.size()?;
     let mut app = App::new(events, Rect::new(0, 0, size.width, size.height), home, start_dir);
     loop {

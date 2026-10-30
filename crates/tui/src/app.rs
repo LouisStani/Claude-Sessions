@@ -5,14 +5,15 @@ use std::thread;
 
 use alacritty_terminal::event::Event as TermEvent;
 use alacritty_terminal::term::TermMode;
+use claude_sessions_core::accounts::{SessionInfo, Snapshot};
+use claude_sessions_core::launcher;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::layout::Rect;
 
 use crate::AppEvent;
-use crate::accounts::{SessionInfo, Snapshot};
 use crate::keys;
 use crate::layout::{self, SLOTS};
-use crate::new_session::{self, FormOutcome, NewSessionForm};
+use crate::new_session::{FormOutcome, NewSessionForm};
 use crate::pane::{Pane, PaneKey};
 use crate::picker::{Entry, Picker, PickerOutcome};
 
@@ -185,7 +186,7 @@ impl App {
                 self.status = Some(format!("starting a session on {}…", request.account));
                 let events = self.events.clone();
                 thread::spawn(move || {
-                    let result = new_session::launch(&request).map(|launched| (request.account.clone(), launched));
+                    let result = launcher::launch(&request).map(|launched| (request.account.clone(), launched));
                     // The receiver only disappears when the app is shutting down.
                     let _ = events.send(AppEvent::Created(result));
                 });

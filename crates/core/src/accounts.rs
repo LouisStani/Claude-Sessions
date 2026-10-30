@@ -6,7 +6,7 @@ use std::thread;
 use claude_accounts::{Paths, launch, registry};
 use serde::Deserialize;
 
-const LAUNCHER: &str = "claude-accounts";
+pub const LAUNCHER: &str = "claude-accounts";
 pub const MIN_LAUNCHER_VERSION: (u32, u32, u32) = (1, 2, 0);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

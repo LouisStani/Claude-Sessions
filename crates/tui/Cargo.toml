@@ -1,0 +1,12 @@
+[package]
+name = "claude-sessions"
+description = "Several Claude Code sessions, across several accounts, side by side"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+alacritty_terminal = { version = "0.26", default-features = false }
+claude-sessions-core = { path = "../core" }
+ratatui = "0.30"
