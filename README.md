@@ -27,7 +27,7 @@ Closing claude-sessions closes nothing: the sessions are Claude Code background 
 - [claude-accounts](https://github.com/LouisStani/Claude-Accounts) 2.0.0 or later, on your `PATH`. claude-sessions also builds it in as a library, but panes still start through the command.
 - Claude Code with background sessions (`claude --bg`, `claude attach`, `claude agents`). Tested with 2.1.312.
 - Rust, to build
-- Linux. Other systems are untested.
+- Used day to day on Linux. CI builds and tests on Linux, macOS and Windows.
 
 ## Installation
 
@@ -37,6 +37,14 @@ cargo install --locked --path claude-sessions/crates/tui
 ```
 
 The binary goes to `~/.cargo/bin`. Make sure it is on your `PATH`.
+
+The desktop app installs the same way:
+
+```sh
+cargo install --locked --path claude-sessions/crates/desktop
+```
+
+Start it with `claude-sessions-desktop`. It draws with the system web view: on Linux, WebKitGTK 4.1 must be installed (`webkit2gtk-4.1` on Arch, `libwebkit2gtk-4.1-dev` on Debian and Ubuntu). Messages between sessions still go through the `claude-sessions` binary above.
 
 To let sessions send messages, add the MCP server once, in any account, with the user scope:
 
