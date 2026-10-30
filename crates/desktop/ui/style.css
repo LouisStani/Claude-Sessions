@@ -5,6 +5,7 @@
   --text: #e0e0e0;
   --muted: #8a8a8a;
   --badge: #f0c060;
+  --done: #70c070;
   --error: #e06060;
   color-scheme: dark;
 }
@@ -80,6 +81,12 @@ ol, ul {
   flex-shrink: 0;
   font-weight: 600;
   color: var(--badge);
+}
+
+.done {
+  flex-shrink: 0;
+  font-weight: 600;
+  color: var(--done);
 }
 
 .detail {
@@ -204,6 +211,10 @@ ol, ul {
 
 .pane.active {
   border-color: var(--muted);
+}
+
+.pane.finished {
+  border-color: var(--done);
 }
 
 .screen {

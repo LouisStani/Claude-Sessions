@@ -94,35 +94,52 @@ fn tabs(shared: State<'_, Shared>) -> Tabs {
     shared.workspace().tabs.clone()
 }
 
-#[tauri::command]
-fn split_pane(shared: State<'_, Shared>, width: f64, height: f64) -> Tabs {
-    let mut workspace = shared.workspace();
-    workspace.tabs.split(width, height);
-    workspace.tabs.clone()
+/// Ends every command that may move the focus: the session now looked at loses its
+/// "finished" mark. The two locks are never held together.
+fn respond(app: &AppHandle, shared: &Shared, workspace: MutexGuard<'_, Workspace>) -> Tabs {
+    let tabs = workspace.tabs.clone();
+    drop(workspace);
+    if let Some(key) = tabs.watched() {
+        let changed = {
+            let mut view = shared.view.lock().unwrap_or_else(PoisonError::into_inner);
+            view::seen(&mut view, key).then(|| view.clone())
+        };
+        if let Some(view) = changed {
+            let _ = app.emit("sessions", &view);
+        }
+    }
+    tabs
 }
 
 #[tauri::command]
-fn close_pane(shared: State<'_, Shared>) -> Tabs {
+fn split_pane(app: AppHandle, shared: State<'_, Shared>, width: f64, height: f64) -> Tabs {
+    let mut workspace = shared.workspace();
+    workspace.tabs.split(width, height);
+    respond(&app, &shared, workspace)
+}
+
+#[tauri::command]
+fn close_pane(app: AppHandle, shared: State<'_, Shared>) -> Tabs {
     let mut workspace = shared.workspace();
     if let Some(closed) = workspace.tabs.current_mut().close() {
         // Detaching only: the background session keeps running in Claude Code.
         workspace.attached.remove(&closed);
     }
-    workspace.tabs.clone()
+    respond(&app, &shared, workspace)
 }
 
 #[tauri::command]
-fn focus_pane(shared: State<'_, Shared>, pane: PaneId) -> Tabs {
+fn focus_pane(app: AppHandle, shared: State<'_, Shared>, pane: PaneId) -> Tabs {
     let mut workspace = shared.workspace();
     workspace.tabs.current_mut().focus(pane);
-    workspace.tabs.clone()
+    respond(&app, &shared, workspace)
 }
 
 #[tauri::command]
-fn focus_step(shared: State<'_, Shared>, step: i64) -> Tabs {
+fn focus_step(app: AppHandle, shared: State<'_, Shared>, step: i64) -> Tabs {
     let mut workspace = shared.workspace();
     workspace.tabs.current_mut().focus_step(step);
-    workspace.tabs.clone()
+    respond(&app, &shared, workspace)
 }
 
 #[tauri::command]
@@ -133,34 +150,34 @@ fn resize_split(shared: State<'_, Shared>, split: PaneId, ratio: f32) -> Tabs {
 }
 
 #[tauri::command]
-fn new_tab(shared: State<'_, Shared>) -> Tabs {
+fn new_tab(app: AppHandle, shared: State<'_, Shared>) -> Tabs {
     let mut workspace = shared.workspace();
     workspace.tabs.new_tab();
-    workspace.tabs.clone()
+    respond(&app, &shared, workspace)
 }
 
 #[tauri::command]
-fn close_tab(shared: State<'_, Shared>) -> Tabs {
+fn close_tab(app: AppHandle, shared: State<'_, Shared>) -> Tabs {
     let mut workspace = shared.workspace();
     // Detaching only: the background sessions keep running in Claude Code.
     for pane in workspace.tabs.close_tab().unwrap_or_default() {
         workspace.attached.remove(&pane);
     }
-    workspace.tabs.clone()
+    respond(&app, &shared, workspace)
 }
 
 #[tauri::command]
-fn tab_step(shared: State<'_, Shared>, step: i64) -> Tabs {
+fn tab_step(app: AppHandle, shared: State<'_, Shared>, step: i64) -> Tabs {
     let mut workspace = shared.workspace();
     workspace.tabs.step(step);
-    workspace.tabs.clone()
+    respond(&app, &shared, workspace)
 }
 
 #[tauri::command]
-fn go_tab(shared: State<'_, Shared>, number: usize) -> Tabs {
+fn go_tab(app: AppHandle, shared: State<'_, Shared>, number: usize) -> Tabs {
     let mut workspace = shared.workspace();
     workspace.tabs.go(number);
-    workspace.tabs.clone()
+    respond(&app, &shared, workspace)
 }
 
 /// A session ended by itself: its pane is emptied, unless another session was opened there since.
@@ -197,12 +214,13 @@ fn open_session(
     let key = SessionKey { account: account.clone(), short_id: short_id.clone() };
     match workspace.tabs.show(pane, key) {
         None => return Err(format!("no pane {pane}")),
-        Some(Shown::Already(_)) => return Ok(Opened { tabs: workspace.tabs.clone(), generation: None }),
+        Some(Shown::Already(_)) => return Ok(Opened { tabs: respond(&app, &shared, workspace), generation: None }),
         Some(Shown::Attach) => {},
     }
     workspace.attached.remove(&pane);
     workspace.generation += 1;
     let generation = workspace.generation;
+    let ended = app.clone();
     let opened = Pane::open(
         &attach_command(&account, &short_id),
         columns,
@@ -212,12 +230,12 @@ fn open_session(
             let _ = output.send(InvokeResponseBody::Raw(bytes.to_vec()));
         },
         // Waits for the lock held here, so it always sees this attach recorded.
-        move || end_session(&app, pane, generation),
+        move || end_session(&ended, pane, generation),
     );
     match opened {
         Ok(attached) => {
             workspace.attached.insert(pane, (generation, attached));
-            Ok(Opened { tabs: workspace.tabs.clone(), generation: Some(generation) })
+            Ok(Opened { tabs: respond(&app, &shared, workspace), generation: Some(generation) })
         },
         Err(error) => {
             workspace.tabs.clear(pane);
@@ -242,9 +260,10 @@ fn resize_pane(shared: State<'_, Shared>, pane: PaneId, columns: u16, rows: u16)
 
 fn publish(app: &AppHandle, update: refresher::Update) -> bool {
     let shared = app.state::<Shared>();
+    let watched = shared.workspace().tabs.watched().cloned();
     let view = {
         let mut current = shared.view.lock().unwrap_or_else(PoisonError::into_inner);
-        let mut next = view::apply(&current, update);
+        let mut next = view::apply(&current, update, watched.as_ref());
         next.errors.splice(0..0, shared.startup_errors.iter().cloned());
         *current = next.clone();
         next

@@ -83,12 +83,13 @@ function leaves(node, found = []) {
 }
 
 export class Panes {
-  constructor(container, bar, { keyFilter, onChange, titleOf }) {
+  constructor(container, bar, { keyFilter, onChange, titleOf, isFinished }) {
     this.container = container;
     this.bar = bar;
     this.keyFilter = keyFilter;
     this.onChange = onChange;
     this.titleOf = titleOf;
+    this.isFinished = isFinished;
     this.state = null;
     this.views = new Map();
   }
@@ -162,8 +163,17 @@ export class Panes {
     // is created in the active tab.
     for (const leaf of leaves(this.layout().root)) this.view(leaf.id).openOnce();
     this.renderBar();
+    this.decorate();
     this.focus();
     this.onChange();
+  }
+
+  // Marks the panes whose session finished a turn that has not been looked at.
+  decorate() {
+    if (this.state === null) return;
+    for (const leaf of this.allLeaves()) {
+      this.view(leaf.id).element.classList.toggle("finished", leaf.session !== null && this.isFinished(leaf.session));
+    }
   }
 
   renderBar() {

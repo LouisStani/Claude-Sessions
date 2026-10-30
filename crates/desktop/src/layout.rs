@@ -197,6 +197,13 @@ impl Layout {
         }
     }
 
+    /// The session in the active pane, if any.
+    pub fn active_session(&self) -> Option<&SessionKey> {
+        let mut found = Vec::new();
+        collect_leaves(&self.root, &mut found);
+        found.into_iter().find(|(id, _)| *id == self.active).and_then(|(_, session)| session.as_ref())
+    }
+
     /// The pane showing `session`, if any.
     pub fn shown_in(&self, session: &SessionKey) -> Option<PaneId> {
         let mut found = Vec::new();
@@ -393,5 +400,17 @@ mod tests {
         assert_eq!(json["root"]["kind"], "split");
         assert_eq!(json["root"]["direction"], "row");
         assert_eq!(json["root"]["second"]["session"]["short_id"], "aaa");
+    }
+
+    #[test]
+    fn the_active_session_follows_the_focus() {
+        let (mut layout, mut ids) = fresh();
+        assert_eq!(layout.active_session(), None);
+        layout.show(1, key("aaa"));
+        assert_eq!(layout.active_session(), Some(&key("aaa")));
+        layout.split(&mut ids, 1000.0, 500.0);
+        assert_eq!(layout.active_session(), None, "the new pane is empty");
+        layout.focus(1);
+        assert_eq!(layout.active_session(), Some(&key("aaa")));
     }
 }

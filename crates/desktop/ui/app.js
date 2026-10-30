@@ -27,6 +27,7 @@ function sessionItem(session) {
   title.append(element("span", "number", session.number ? `${session.number}` : ""));
   title.append(element("span", "name", session.title));
   if (session.unread > 0) title.append(element("span", "badge", `${session.unread} msg`));
+  if (session.finished) title.append(element("span", "done", "done"));
   const detail = [session.account, session.state];
   if (session.isolated) detail.push("isolated");
   item.append(title, element("div", "detail", detail.join(" · ")));
@@ -57,6 +58,12 @@ function render(view) {
   }
   document.getElementById("errors").replaceChildren(...view.errors.map((error) => element("li", "error", error)));
   panes.renderBar();
+  panes.decorate();
+}
+
+// Claude finished a turn in this session and it has not been looked at since.
+function isFinished(key) {
+  return lastView.sessions.some((row) => row.finished && row.account === key.account && row.short_id === key.short_id);
 }
 
 // The title of a session shown in a pane, for the tab bar.
@@ -210,6 +217,7 @@ const panes = new Panes(document.getElementById("panes"), document.getElementByI
   keyFilter: (event) => shortcutFor(event) === null,
   onChange: () => render(lastView),
   titleOf,
+  isFinished,
 });
 
 document.addEventListener("keydown", onKey);

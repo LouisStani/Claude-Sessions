@@ -38,6 +38,11 @@ impl Tabs {
         &mut self.tabs[index].layout
     }
 
+    /// The session being looked at: the one in the active pane of the visible tab.
+    pub fn watched(&self) -> Option<&SessionKey> {
+        self.tabs[self.index()].layout.active_session()
+    }
+
     /// Splits the active pane of the active tab.
     pub fn split(&mut self, width: f64, height: f64) {
         let index = self.index();
@@ -232,5 +237,17 @@ mod tests {
         assert_eq!(json["active"], json["tabs"][1]["id"]);
         assert_eq!(json["tabs"][1]["layout"]["root"]["kind"], "leaf");
         assert!(json.get("ids").is_none());
+    }
+
+    #[test]
+    fn the_watched_session_is_the_one_of_the_visible_tab() {
+        let mut tabs = Tabs::default();
+        let pane = active_tab(&tabs).layout.active();
+        tabs.show(pane, key("aaa"));
+        assert_eq!(tabs.watched(), Some(&key("aaa")));
+        tabs.new_tab();
+        assert_eq!(tabs.watched(), None);
+        tabs.go(1);
+        assert_eq!(tabs.watched(), Some(&key("aaa")));
     }
 }
