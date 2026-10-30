@@ -90,15 +90,17 @@ mod tests {
         Exit,
     }
 
+    /// `sh` and `stty` exist on every Unix; Windows gets its own test below.
+    #[cfg(unix)]
     fn shell(script: &str) -> AttachCommand {
         AttachCommand { program: "sh".into(), args: vec!["-c".into(), script.into()], env: Vec::new() }
     }
 
-    fn open(script: &str, columns: u16, rows: u16) -> (Pane, Receiver<Seen>) {
+    fn open(command: &AttachCommand, columns: u16, rows: u16) -> (Pane, Receiver<Seen>) {
         let (sender, seen) = mpsc::channel();
         let exit = sender.clone();
         let pane = Pane::open(
-            &shell(script),
+            command,
             columns,
             rows,
             move |bytes| {
@@ -137,23 +139,26 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn output_arrives_then_the_end_is_reported() {
-        let (_pane, seen) = open("printf ready", 80, 24);
+        let (_pane, seen) = open(&shell("printf ready"), 80, 24);
         assert!(wait_for(&seen, "ready").contains("ready"));
         assert!(exited(&seen));
     }
 
     #[test]
+    #[cfg(unix)]
     fn typed_input_reaches_the_program() {
-        let (mut pane, seen) = open("read line; printf 'got:%s' \"$line\"", 80, 24);
+        let (mut pane, seen) = open(&shell("read line; printf 'got:%s' \"$line\""), 80, 24);
         pane.write(b"abc\r").expect("write");
         let text = wait_for(&seen, "got:abc");
         assert!(text.contains("got:abc"), "{text:?}");
     }
 
     #[test]
+    #[cfg(unix)]
     fn resize_reaches_the_program() {
-        let (mut pane, seen) = open("read go; stty size", 80, 24);
+        let (mut pane, seen) = open(&shell("read go; stty size"), 80, 24);
         pane.resize(100, 30).expect("resize");
         pane.write(b"\r").expect("write");
         let text = wait_for(&seen, "30 100");
@@ -161,11 +166,23 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn closing_the_pane_ends_the_program() {
-        let (pane, seen) = open("sleep 30", 80, 24);
+        let (pane, seen) = open(&shell("sleep 30"), 80, 24);
         let started = Instant::now();
         drop(pane);
         assert!(started.elapsed() < TIMEOUT, "closing waited for the program to end by itself");
+        assert!(exited(&seen));
+    }
+
+    /// The Windows pseudo-console (ConPTY): output arrives and the end of the program is seen.
+    #[test]
+    #[cfg(windows)]
+    fn windows_output_arrives_then_the_end_is_reported() {
+        let command =
+            AttachCommand { program: "cmd".into(), args: vec!["/C".into(), "echo ready".into()], env: Vec::new() };
+        let (_pane, seen) = open(&command, 80, 24);
+        assert!(wait_for(&seen, "ready").contains("ready"));
         assert!(exited(&seen));
     }
 }

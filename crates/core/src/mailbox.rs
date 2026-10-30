@@ -1,10 +1,11 @@
-use std::fs::{self, DirBuilder};
+use std::fs;
 use std::io;
-use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use claude_accounts::Paths;
+use claude_accounts::files::create_private_dir;
 use serde::{Deserialize, Serialize};
 
 const READ_DIR: &str = "read";
@@ -24,15 +25,15 @@ pub struct Mailbox {
     root: PathBuf,
 }
 
-/// `$XDG_DATA_HOME/claude-sessions/mailbox`, else `~/.local/share/claude-sessions/mailbox`.
+/// Next to the claude-accounts data: `$XDG_DATA_HOME` (else `~/.local/share`) on Unix, the
+/// user's AppData on Windows, then `claude-sessions/mailbox`.
 pub fn default_root() -> io::Result<PathBuf> {
-    let data = match std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
-        Some(data) => PathBuf::from(data),
-        None => std::env::home_dir()
-            .ok_or_else(|| io::Error::other("HOME is not set"))?
-            .join(".local/share"),
-    };
-    Ok(data.join("claude-sessions/mailbox"))
+    root_for(&Paths::from_env().map_err(io::Error::other)?)
+}
+
+fn root_for(paths: &Paths) -> io::Result<PathBuf> {
+    let data = paths.data_root.parent().ok_or_else(|| io::Error::other("claude-accounts data has no parent"))?;
+    Ok(data.join("claude-sessions").join("mailbox"))
 }
 
 pub fn now_secs() -> u64 {
@@ -44,8 +45,9 @@ fn is_valid_session_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
+/// 700 on Unix; Windows keeps the profile's own access rules.
 fn private_dir(path: &Path) -> io::Result<()> {
-    DirBuilder::new().recursive(true).mode(0o700).create(path)
+    create_private_dir(path)
 }
 
 fn is_message_file(path: &Path) -> bool {
@@ -129,7 +131,6 @@ impl Mailbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     fn temp_root(label: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!("claude-sessions-test-{label}-{}", std::process::id()));
@@ -162,12 +163,22 @@ mod tests {
     }
 
     #[test]
-    fn inbox_is_private_and_temporary_files_are_ignored() {
+    #[cfg(unix)]
+    fn inbox_is_private() {
+        use std::os::unix::fs::PermissionsExt;
         let root = temp_root("private");
         let mailbox = Mailbox::new(root.clone());
         mailbox.send("cccc", &message("hi", 1)).unwrap();
         let mode = fs::metadata(root.join("cccc")).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o700);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn temporary_and_hidden_files_are_ignored() {
+        let root = temp_root("ignored");
+        let mailbox = Mailbox::new(root.clone());
+        mailbox.send("cccc", &message("hi", 1)).unwrap();
         fs::write(root.join("cccc/.half.tmp"), b"{").unwrap();
         fs::write(root.join("cccc/.hidden.json"), b"{").unwrap();
         fs::write(root.join("cccc/stray.txt"), b"{").unwrap();
@@ -182,5 +193,23 @@ mod tests {
         assert!(mailbox.send("../escape", &message("x", 1)).is_err());
         assert!(mailbox.unread_count("a/b").is_err());
         assert!(mailbox.send("", &message("x", 1)).is_err());
+    }
+
+    #[test]
+    fn the_mailbox_sits_next_to_the_claude_accounts_data() {
+        let home = PathBuf::from("/home/u");
+        let paths = Paths::from_roots(home.join(".config"), home.join(".local/share"), home.clone());
+        assert_eq!(root_for(&paths).unwrap(), home.join(".local/share").join("claude-sessions").join("mailbox"));
+    }
+
+    /// The path of versions up to 0.3.0, so existing messages are still found.
+    #[test]
+    #[cfg(unix)]
+    fn the_unix_path_is_unchanged() {
+        let data = match std::env::var_os("XDG_DATA_HOME").filter(|value| !value.is_empty()) {
+            Some(data) => PathBuf::from(data),
+            None => std::env::home_dir().unwrap().join(".local/share"),
+        };
+        assert_eq!(default_root().unwrap(), data.join("claude-sessions/mailbox"));
     }
 }

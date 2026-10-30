@@ -124,7 +124,7 @@ cargo run -p claude-sessions-desktop
 
 On Linux the desktop interface needs WebKitGTK 4.1 (`webkit2gtk-4.1` on Arch).
 
-The tests never start Claude Code and never touch your accounts.
+The tests never start Claude Code and never touch your accounts. CI runs clippy and the tests on Linux, macOS and Windows at every push.
 
 ## License
 
