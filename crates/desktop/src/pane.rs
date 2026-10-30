@@ -182,7 +182,8 @@ mod tests {
         let command =
             AttachCommand { program: "cmd".into(), args: vec!["/C".into(), "echo ready".into()], env: Vec::new() };
         let (_pane, seen) = open(&command, 80, 24);
-        assert!(wait_for(&seen, "ready").contains("ready"));
+        let text = wait_for(&seen, "ready");
+        assert!(text.contains("ready"), "{text:?}");
         assert!(exited(&seen));
     }
 }
