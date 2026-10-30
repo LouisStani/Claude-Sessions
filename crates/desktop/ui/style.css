@@ -102,9 +102,39 @@ ol, ul {
   font-size: 12px;
 }
 
-.empty {
+.openable {
+  cursor: pointer;
+}
+
+.openable:hover {
+  background: var(--border);
+}
+
+.open {
+  background: var(--border);
+  box-shadow: inset 2px 0 0 var(--text);
+}
+
+#pane {
+  position: relative;
   flex: 1;
+  min-width: 0;
+  padding: 8px;
+}
+
+#terminal {
+  height: 100%;
+}
+
+#placeholder {
+  position: absolute;
+  inset: 0;
+  margin: 0;
   display: grid;
   place-items: center;
   color: var(--muted);
+}
+
+#placeholder[hidden] {
+  display: none;
 }

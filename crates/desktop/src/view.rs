@@ -12,6 +12,8 @@ pub struct SessionRow {
     pub number: Option<usize>,
     pub title: String,
     pub account: String,
+    /// Only background sessions have one, and only they can be opened here.
+    pub short_id: Option<String>,
     pub state: &'static str,
     pub isolated: bool,
     pub unread: usize,
@@ -30,6 +32,7 @@ fn row(index: usize, session: &SessionInfo, unread: usize) -> SessionRow {
         number: (index < NUMBERED).then_some(index + 1),
         title: session.title(),
         account: session.account.clone(),
+        short_id: session.short_id.clone(),
         state: session.state.label(),
         isolated: session.isolated,
         unread,
@@ -103,10 +106,11 @@ mod tests {
     }
 
     #[test]
-    fn rows_carry_account_state_and_isolation() {
+    fn rows_carry_account_id_state_and_isolation() {
         let sessions = vec![session("pro", "x", true)];
         let view = apply(&ListView::default(), Ok((snapshot(sessions), HashMap::new())));
         assert_eq!(view.sessions[0].account, "pro");
+        assert_eq!(view.sessions[0].short_id.as_deref(), Some("abc"));
         assert_eq!(view.sessions[0].state, "waiting");
         assert!(view.sessions[0].isolated);
     }

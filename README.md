@@ -112,7 +112,9 @@ claude-sessions never reads credentials. All account handling goes through claud
 
 ## Development
 
-The workspace has three crates: `crates/core` (accounts, sessions, messages, refresh, shared by every interface), `crates/tui` (the terminal interface, the `claude-sessions` binary) and `crates/desktop` (the desktop interface, built with [Tauri](https://tauri.app); for now it only shows the live session list).
+The workspace has three crates: `crates/core` (accounts, sessions, messages, refresh, shared by every interface), `crates/tui` (the terminal interface, the `claude-sessions` binary) and `crates/desktop` (the desktop interface, built with [Tauri](https://tauri.app); for now it shows the live session list, and clicking a background session opens it in a single pane on the right; the keyboard shortcuts of the terminal interface are not there yet).
+
+The desktop page has no build step. [xterm.js](https://xtermjs.org) 6.0.0 and its fit (0.11.0) and WebGL (0.19.0) addons are copied from npm into `crates/desktop/ui/vendor/`, each with its MIT license.
 
 ```sh
 cargo test --workspace
