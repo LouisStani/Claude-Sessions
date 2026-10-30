@@ -88,7 +88,15 @@ function chip(session, index) {
   item.append(element("span", "pos", index < 9 ? `${index + 1}` : ""));
   item.append(element("span", "dot", session.finished ? "✓" : ""));
   item.append(element("span", "chip-title", session.label));
-  if (session.unread > 0) item.append(element("span", "badge", `${session.unread}`));
+  if (session.unread > 0) {
+    const badge = element("span", "badge", `${session.unread}`);
+    badge.title = "read the messages";
+    badge.addEventListener("click", (event) => {
+      event.stopPropagation();
+      openMessages(session);
+    });
+    item.append(badge);
+  }
   if (panes.shows(session)) item.classList.add("open");
   item.addEventListener("click", () => traced("chip click", () => openSession(session)));
   item.addEventListener("mouseenter", () => showTip(session, item));
@@ -169,6 +177,7 @@ function render(view) {
   panes.decorate();
   mark("render sessions", start);
   restoreTab();
+  if (document.getElementById("messages").open) loadMessages();
 }
 
 // Tabs whose session is being opened again, so that a render meanwhile does not open it twice.
@@ -246,6 +255,64 @@ function stepSession(step) {
     return;
   }
   return openSession(session);
+}
+
+// The session whose messages are shown, and the last request, as answers can cross.
+const messagesView = { session: null, request: 0 };
+
+function age(sentAt) {
+  const minutes = Math.floor(Math.max(Date.now() / 1000 - sentAt, 0) / 60);
+  if (minutes === 0) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 48 * 60) return `${Math.floor(minutes / 60)} h ago`;
+  return `${Math.floor(minutes / (24 * 60))} d ago`;
+}
+
+function messageItem(row) {
+  const item = element("li", "message");
+  const head = element("div", "message-head");
+  head.append(element("span", "message-who", `${row.incoming ? "← from" : "→ to"} ${row.other}`));
+  if (row.account) head.append(element("span", "", row.account));
+  head.append(element("span", "", age(row.sent_at)));
+  if (row.unread) head.append(element("span", "message-unread", "unread"));
+  item.append(head, element("p", "message-text", row.text));
+  return item;
+}
+
+// Read only: the session still gets its messages from read_messages.
+async function loadMessages() {
+  const request = ++messagesView.request;
+  let rows;
+  try {
+    rows = await invoke("messages", { sessionId: messagesView.session.session_id });
+  } catch (error) {
+    rows = `${error}`;
+  }
+  if (request !== messagesView.request) return;
+  const list = document.getElementById("messages-list");
+  if (typeof rows === "string") list.replaceChildren(element("li", "muted", rows));
+  else if (rows.length === 0) list.replaceChildren(element("li", "muted", "no messages"));
+  else list.replaceChildren(...rows.map(messageItem));
+  list.scrollTop = list.scrollHeight;
+}
+
+function openMessages(session) {
+  messagesView.session = session;
+  document.getElementById("messages-title").textContent = `messages · ${session.label}`;
+  document.getElementById("messages-list").replaceChildren();
+  document.getElementById("messages").showModal();
+  return loadMessages();
+}
+
+// Ctrl+Shift+M: the messages of the session of the active pane.
+function openActiveMessages() {
+  const key = panes.activeSession();
+  const session = key && rowOf(key);
+  if (!session) {
+    setStatus("no session in this pane to read messages of");
+    return;
+  }
+  return openMessages(session);
 }
 
 function openNewSessionForm() {
@@ -464,6 +531,7 @@ function shortcutFor(event) {
   if (ctrlShift && event.code === "KeyT") return { run: openProjectForm };
   if (ctrlShift && event.code === "KeyX") return { run: closeTab };
   if (ctrlShift && event.code === "KeyK") return { run: confirmHide };
+  if (ctrlShift && event.code === "KeyM") return { run: openActiveMessages };
   if (ctrlShift && event.code === "KeyH") return { run: () => panes.tabStep(-1) };
   if (ctrlShift && event.code === "KeyL") return { run: () => panes.tabStep(1) };
   if (ctrlShift && digit) return { run: () => panes.goTab(Number(digit[1])) };

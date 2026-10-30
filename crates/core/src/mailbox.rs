@@ -25,6 +25,34 @@ pub struct Mailbox {
     root: PathBuf,
 }
 
+/// A message as the app shows it: received by a session when `to_session` is that session,
+/// sent by it otherwise. `unread` until the receiving session calls `read_messages`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Entry {
+    pub message: Message,
+    pub to_session: String,
+    pub unread: bool,
+}
+
+/// The message files of `dir`, in name order (the order they were sent); none if `dir` does
+/// not exist.
+fn message_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut files = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if path.is_file() && is_message_file(&path) {
+            files.push(path);
+        }
+    }
+    files.sort();
+    Ok(files)
+}
+
 /// Where claude-sessions keeps its files, next to the claude-accounts data: `$XDG_DATA_HOME`
 /// (else `~/.local/share`) on Unix, the user's AppData on Windows, then `claude-sessions`.
 pub fn data_dir() -> io::Result<PathBuf> {
@@ -98,21 +126,46 @@ impl Mailbox {
     }
 
     fn unread_files(&self, session: &str) -> io::Result<Vec<PathBuf>> {
-        let inbox = self.inbox(session)?;
-        let entries = match fs::read_dir(&inbox) {
+        message_files(&self.inbox(session)?)
+    }
+
+    /// The messages of an inbox, read or not, with the name of their file.
+    fn inbox_entries(&self, to_session: &str) -> io::Result<Vec<(String, Entry)>> {
+        let inbox = self.inbox(to_session)?;
+        let mut found = Vec::new();
+        for (dir, unread) in [(inbox.clone(), true), (inbox.join(READ_DIR), false)] {
+            for file in message_files(&dir)? {
+                // A damaged file must not hide the other messages.
+                let Ok(message) = fs::read(&file).map_err(io::Error::other).and_then(|bytes| serde_json::from_slice(&bytes).map_err(io::Error::other)) else {
+                    continue;
+                };
+                let name = file.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+                found.push((name, Entry { message, to_session: to_session.to_string(), unread }));
+            }
+        }
+        Ok(found)
+    }
+
+    /// What `session` received and sent, read or not, oldest first. Nothing is marked read:
+    /// the session still gets its messages from `read_messages`.
+    pub fn conversation(&self, session: &str) -> io::Result<Vec<Entry>> {
+        let mut found = self.inbox_entries(session)?;
+        let inboxes = match fs::read_dir(&self.root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(error) => return Err(error),
         };
-        let mut files = Vec::new();
-        for entry in entries {
-            let path = entry?.path();
-            if path.is_file() && is_message_file(&path) {
-                files.push(path);
+        for inbox in inboxes {
+            let inbox = inbox?;
+            let other = inbox.file_name().to_string_lossy().into_owned();
+            if other == session || !is_valid_session_id(&other) || !inbox.path().is_dir() {
+                continue;
             }
+            let sent = self.inbox_entries(&other)?.into_iter().filter(|(_, entry)| entry.message.from_session == session);
+            found.extend(sent);
         }
-        files.sort();
-        Ok(files)
+        found.sort_by(|(a_name, a), (b_name, b)| (a.message.sent_at, a_name).cmp(&(b.message.sent_at, b_name)));
+        Ok(found.into_iter().map(|(_, entry)| entry).collect())
     }
 
     pub fn unread_count(&self, session: &str) -> io::Result<usize> {
@@ -170,6 +223,47 @@ mod tests {
         assert_eq!(mailbox.unread_count("bbbb-2222").unwrap(), 0);
         assert!(mailbox.take_unread("bbbb-2222").unwrap().is_empty());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    fn from(session: &str, text: &str, sent_at: u64) -> Message {
+        Message { from_session: session.into(), from_title: session.into(), from_account: "louis".into(), sent_at, text: text.into() }
+    }
+
+    #[test]
+    fn a_conversation_holds_what_was_received_and_sent_and_marks_nothing_read() {
+        let root = temp_root("conversation");
+        let mailbox = Mailbox::new(root.clone());
+        mailbox.send("bbbb", &from("aaaa", "a to b", 10)).unwrap();
+        mailbox.send("aaaa", &from("cccc", "c to a", 20)).unwrap();
+        mailbox.send("aaaa", &from("bbbb", "b to a", 5)).unwrap();
+        mailbox.send("cccc", &from("bbbb", "b to c", 7)).unwrap();
+        assert_eq!(mailbox.take_unread("aaaa").unwrap().len(), 2);
+        mailbox.send("aaaa", &from("bbbb", "b to a again", 30)).unwrap();
+        fs::write(root.join("aaaa/00000000000000000040-1-0.json"), b"{broken").unwrap();
+        let unread_before = (mailbox.unread_count("aaaa").unwrap(), mailbox.unread_count("bbbb").unwrap());
+        let seen: Vec<_> = mailbox
+            .conversation("aaaa")
+            .unwrap()
+            .into_iter()
+            .map(|entry| (entry.message.text, entry.to_session, entry.unread))
+            .collect();
+        assert_eq!(
+            seen,
+            [
+                ("b to a".to_string(), "aaaa".to_string(), false),
+                ("a to b".to_string(), "bbbb".to_string(), true),
+                ("c to a".to_string(), "aaaa".to_string(), false),
+                ("b to a again".to_string(), "aaaa".to_string(), true),
+            ]
+        );
+        assert_eq!((mailbox.unread_count("aaaa").unwrap(), mailbox.unread_count("bbbb").unwrap()), unread_before);
+        assert!(mailbox.conversation("never-written").unwrap().is_empty());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn no_mailbox_yet_means_no_conversation() {
+        assert!(Mailbox::new(temp_root("none")).conversation("aaaa").unwrap().is_empty());
     }
 
     #[test]

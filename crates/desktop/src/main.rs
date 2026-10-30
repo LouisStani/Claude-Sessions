@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod layout;
+mod messages;
 mod pane;
 mod prefs;
 mod projects;
@@ -17,6 +18,7 @@ use std::time::{Duration, Instant};
 
 use claude_sessions_core::attach::{attach_command, stop_command};
 use claude_sessions_core::launcher::{self, Request, resolve_directory};
+use claude_sessions_core::mailbox::Mailbox;
 use claude_sessions_core::{accounts, mailbox, refresher};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
@@ -24,6 +26,7 @@ use tauri::ipc::{Channel, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State};
 
 use crate::layout::{PaneId, SessionKey, Shown};
+use crate::messages::MessageRow;
 use crate::pane::Pane;
 use crate::prefs::Prefs;
 use crate::projects::Project;
@@ -295,6 +298,24 @@ async fn hide_session(app: AppHandle, shared: State<'_, Shared>, account: String
         detach(&mut workspace, pane);
     }
     Ok(respond(&app, &shared, workspace))
+}
+
+/// What the session received and sent, oldest first, read or not. Nothing is marked read.
+/// By full id: a session running in another terminal has messages too.
+#[tauri::command(async)]
+fn messages(shared: State<'_, Shared>, session_id: String) -> Result<Vec<MessageRow>, String> {
+    let _span = shared.trace.span("messages");
+    let known: HashMap<String, (String, String)> = {
+        let view = shared.view.lock().unwrap_or_else(PoisonError::into_inner);
+        let row = view.sessions.iter().find(|row| row.session_id == session_id).ok_or("this session is gone")?;
+        if row.isolated {
+            return Err("isolated account: no messages".into());
+        }
+        view.sessions.iter().map(|row| (row.session_id.clone(), (row.label.clone(), row.account.clone()))).collect()
+    };
+    let mailbox = Mailbox::new(mailbox::default_root().map_err(|error| error.to_string())?);
+    let entries = mailbox.conversation(&session_id).map_err(|error| format!("cannot read messages: {error}"))?;
+    Ok(messages::rows(entries, &session_id, |id| known.get(id).cloned()))
 }
 
 /// A hidden session comes back to the bar.
@@ -577,6 +598,7 @@ fn main() -> ExitCode {
             rename_session,
             hide_session,
             show_session,
+            messages,
             close_tab,
             tab_step,
             go_tab,

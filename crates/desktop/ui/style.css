@@ -638,3 +638,47 @@ input:focus, select:focus {
   background: var(--surface);
   border-color: var(--active);
 }
+
+#messages {
+  width: 640px;
+}
+
+#messages-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+#messages-list {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.message + .message {
+  margin-top: 10px;
+}
+
+.message-head {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  font-size: 11px;
+  color: var(--faint);
+}
+
+.message-who {
+  font-weight: 700;
+  color: var(--muted);
+}
+
+.message-unread {
+  font-weight: 700;
+  color: var(--waiting);
+}
+
+.message-text {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}

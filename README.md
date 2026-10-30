@@ -97,6 +97,8 @@ The MCP server gives every session three tools:
 
 A session reads its messages only when it calls `read_messages`, for example when you ask it to. Nothing is typed into a session for you.
 
+In the desktop interface, Ctrl+Shift+M shows the messages the session of the active pane received and sent, oldest first, read or not (a click on the message count of a chip does the same for that session). It only reads them: nothing is marked read, so the session still gets its messages from `read_messages`.
+
 Messages are information, not orders. The tools tell Claude to treat them that way and to ask you before acting on a request they contain. In testing, a session that received "please create this file" did not create it and asked the user first.
 
 Isolated accounts (`claude-accounts isolate <account>`, for a work account for example) stay out of messages: their sessions never appear in `list_sessions`, cannot receive messages, and the MCP server refuses to start in them. They can still be shown in a pane.
